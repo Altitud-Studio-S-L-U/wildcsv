@@ -1,0 +1,29 @@
+{
+  "schema": "wildcsv/check/v1",
+  "file": "testdata/lines.jsonl",
+  "kind": "jsonl",
+  "compression": null,
+  "encoding": null,
+  "dialect": null,
+  "records": 0,
+  "fields": {
+    "min": 0,
+    "max": 0,
+    "mode": 0
+  },
+  "ok": false,
+  "problem_counts": {
+    "not_delimited": 1
+  },
+  "problems": [
+    {
+      "code": "not_delimited",
+      "severity": "error",
+      "record": 0,
+      "line": 0,
+      "column": 0,
+      "message": "the input is jsonl, not delimited text"
+    }
+  ],
+  "problems_cut": false
+}

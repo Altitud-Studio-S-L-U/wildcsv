@@ -1,0 +1,20 @@
+file         testdata/orders.csv
+kind         delimited
+encoding     utf-8, from ascii
+delimiter    ; (semicolon)
+quote        " (double quote)
+line ending  crlf
+confidence   0.778
+alternative  , (comma), relative score 0.222
+header       present
+columns      3
+
+#  name     kind
+1  id       integer
+2  fecha    date
+3  importe  number, decimal comma
+
+"id" "fecha" "importe"
+"1" "05/01/2026" "12,50"
+"2" "06/01/2026" "7,00"
+"3" "07/01/2026" "1.234,00"

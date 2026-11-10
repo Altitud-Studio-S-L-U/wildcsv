@@ -1,0 +1,56 @@
+{
+  "schema": "wildcsv/inspect/v1",
+  "file": "testdata/tabs.tsv.bz2",
+  "kind": "delimited",
+  "compression": "bzip2",
+  "encoding": {
+    "name": "utf-8",
+    "bom": false,
+    "basis": "ascii"
+  },
+  "dialect": {
+    "delimiter": "\t",
+    "quote": "\"",
+    "escape": null,
+    "skip_initial_space": false
+  },
+  "line_ending": "lf",
+  "confidence": 1,
+  "alternatives": [],
+  "header": {
+    "present": true,
+    "names": [
+      "a",
+      "b"
+    ]
+  },
+  "columns": [
+    {
+      "index": 1,
+      "name": "a",
+      "kind": "integer"
+    },
+    {
+      "index": 2,
+      "name": "b",
+      "kind": "integer"
+    }
+  ],
+  "column_count": 2,
+  "sample": {
+    "bytes": 8,
+    "complete": true,
+    "records": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ],
+    "cut": false
+  },
+  "hint": ""
+}

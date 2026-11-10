@@ -416,6 +416,7 @@ Flags common to the three commands: `--json`, `--delimiter`, `--quote`, `--escap
   "schema": "wildcsv/check/v1",
   "file": "orders.csv",
   "kind": "delimited",
+  "compression": null,
   "encoding": { "name": "utf-8", "bom": true, "basis": "bom" },
   "dialect": { "delimiter": ",", "quote": "\"", "escape": null, "skip_initial_space": false },
   "records": 120034,
@@ -451,6 +452,8 @@ Flags common to the three commands: `--json`, `--delimiter`, `--quote`, `--escap
 ### 10.4 `convert`
 
 `convert` writes comma-separated, double-quoted CSV in UTF-8 without a byte order mark, with line feeds or, with `--crlf`, carriage return and line feed. With `--output` it writes to a temporary file beside the target and renames it only after the whole input was read without error, so a failed run leaves no partial file. On standard output it stops at the first error.
+
+With `--json`, `convert` needs `--output`, because the records and the report cannot share standard output. The report, `wildcsv/convert/v1`, gives the file, the output, the encoding, the dialect, the number of records written, `ok`, and `error`: `null`, or the first problem in the shape of a `check` problem.
 
 ## 11. Evidence
 

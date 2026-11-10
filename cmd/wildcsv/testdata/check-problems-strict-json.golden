@@ -1,0 +1,56 @@
+{
+  "schema": "wildcsv/check/v1",
+  "file": "testdata/problems.csv",
+  "kind": "delimited",
+  "compression": null,
+  "encoding": {
+    "name": "utf-8",
+    "bom": false,
+    "basis": "ascii"
+  },
+  "dialect": {
+    "delimiter": ",",
+    "quote": "\"",
+    "escape": null,
+    "skip_initial_space": false
+  },
+  "records": 2,
+  "fields": {
+    "min": 3,
+    "max": 4,
+    "mode": 3
+  },
+  "ok": false,
+  "problem_counts": {
+    "ragged_record": 1,
+    "stray_quote": 1,
+    "unterminated_quote": 1
+  },
+  "problems": [
+    {
+      "code": "stray_quote",
+      "severity": "error",
+      "record": 2,
+      "line": 2,
+      "column": 14,
+      "message": "quote character inside a quoted field neither doubles nor closes it; it was read as data"
+    },
+    {
+      "code": "ragged_record",
+      "severity": "error",
+      "record": 2,
+      "line": 3,
+      "column": 1,
+      "message": "record has 4 fields; the sampled records have 3"
+    },
+    {
+      "code": "unterminated_quote",
+      "severity": "error",
+      "record": 4,
+      "line": 4,
+      "column": 5,
+      "message": "the quoted field that starts here is not closed before the end of the input"
+    }
+  ],
+  "problems_cut": false
+}

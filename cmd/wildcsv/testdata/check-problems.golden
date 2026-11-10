@@ -1,0 +1,13 @@
+file      testdata/problems.csv
+kind      delimited
+records   3
+fields    min 3, max 4, most common 3
+result    errors found
+problems  ragged_record: 1
+problems  stray_quote: 2
+problems  unterminated_quote: 1
+
+line 2, column 14: warning stray_quote: quote character inside a quoted field neither doubles nor closes it; it was read as data
+line 2, column 17: warning stray_quote: quote character inside a quoted field neither doubles nor closes it; it was read as data
+line 3, column 1: error ragged_record: record has 4 fields; the sampled records have 3
+line 4, column 5: error unterminated_quote: the quoted field that starts here is not closed before the end of the input

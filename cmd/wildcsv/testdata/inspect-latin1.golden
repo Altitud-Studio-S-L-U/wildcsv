@@ -1,0 +1,17 @@
+file         testdata/latin1.csv
+kind         delimited
+encoding     windows-1252, from fallback
+delimiter    , (comma)
+quote        " (double quote)
+line ending  lf
+confidence   1.000
+header       present
+columns      2
+hint         The text is not valid UTF-8 and was read as Windows-1252. If characters look wrong, pass --encoding.
+
+#  name  kind
+1  café  integer
+2  niño  integer
+
+"café" "niño"
+"1" "2"

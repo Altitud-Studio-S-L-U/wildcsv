@@ -1,0 +1,5 @@
+file     testdata/orders.csv
+kind     delimited
+records  4
+fields   min 3, max 3, most common 3
+result   no errors

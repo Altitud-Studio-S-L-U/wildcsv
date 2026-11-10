@@ -1,0 +1,28 @@
+{
+  "schema": "wildcsv/inspect/v1",
+  "file": "testdata/lines.jsonl",
+  "kind": "jsonl",
+  "compression": null,
+  "encoding": {
+    "name": "utf-8",
+    "bom": false,
+    "basis": "ascii"
+  },
+  "dialect": null,
+  "line_ending": "none",
+  "confidence": 0,
+  "alternatives": [],
+  "header": {
+    "present": null,
+    "names": []
+  },
+  "columns": [],
+  "column_count": 0,
+  "sample": {
+    "bytes": 16,
+    "complete": true,
+    "records": [],
+    "cut": false
+  },
+  "hint": "This is JSON Lines, not delimited text. Read it with a JSON Lines parser."
+}

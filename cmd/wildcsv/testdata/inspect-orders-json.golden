@@ -1,0 +1,83 @@
+{
+  "schema": "wildcsv/inspect/v1",
+  "file": "testdata/orders.csv",
+  "kind": "delimited",
+  "compression": null,
+  "encoding": {
+    "name": "utf-8",
+    "bom": false,
+    "basis": "ascii"
+  },
+  "dialect": {
+    "delimiter": ";",
+    "quote": "\"",
+    "escape": null,
+    "skip_initial_space": false
+  },
+  "line_ending": "crlf",
+  "confidence": 0.778,
+  "alternatives": [
+    {
+      "delimiter": ",",
+      "quote": null,
+      "escape": null,
+      "skip_initial_space": false,
+      "relative_score": 0.222
+    }
+  ],
+  "header": {
+    "present": true,
+    "names": [
+      "id",
+      "fecha",
+      "importe"
+    ]
+  },
+  "columns": [
+    {
+      "index": 1,
+      "name": "id",
+      "kind": "integer"
+    },
+    {
+      "index": 2,
+      "name": "fecha",
+      "kind": "date"
+    },
+    {
+      "index": 3,
+      "name": "importe",
+      "kind": "number",
+      "decimal_comma": true
+    }
+  ],
+  "column_count": 3,
+  "sample": {
+    "bytes": 82,
+    "complete": true,
+    "records": [
+      [
+        "id",
+        "fecha",
+        "importe"
+      ],
+      [
+        "1",
+        "05/01/2026",
+        "12,50"
+      ],
+      [
+        "2",
+        "06/01/2026",
+        "7,00"
+      ],
+      [
+        "3",
+        "07/01/2026",
+        "1.234,00"
+      ]
+    ],
+    "cut": false
+  },
+  "hint": ""
+}
