@@ -15,8 +15,16 @@
     "skip_initial_space": false
   },
   "line_ending": "lf",
-  "confidence": 1,
-  "alternatives": [],
+  "confidence": 0.999,
+  "alternatives": [
+    {
+      "delimiter": ",",
+      "quote": "\"",
+      "escape": null,
+      "skip_initial_space": false,
+      "relative_score": 0.001
+    }
+  ],
   "header": {
     "present": true,
     "names": [
