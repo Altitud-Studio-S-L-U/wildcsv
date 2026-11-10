@@ -144,12 +144,31 @@ func textKind(text []byte, complete bool) Kind {
 // binary format has far more, or a signature rawKind recognises.
 func isBinaryText(text []byte) bool {
 	controls := 0
-	for _, c := range text {
-		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != 0x1A {
+	i := 0
+	// Words with no byte below 0x20 are skipped eight bytes at a time. The
+	// test can flag a word wrongly but never misses one, and a flagged word
+	// is counted byte by byte.
+	for ; i+8 <= len(text); i += 8 {
+		x := binary.LittleEndian.Uint64(text[i:])
+		if (x-0x2020202020202020)&^x&swarHi == 0 {
+			continue
+		}
+		for _, c := range text[i : i+8] {
+			if isControl(c) {
+				controls++
+			}
+		}
+	}
+	for _, c := range text[i:] {
+		if isControl(c) {
 			controls++
 		}
 	}
 	return controls > 0 && controls*100 > utf8.RuneCount(text)
+}
+
+func isControl(c byte) bool {
+	return c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != 0x1A
 }
 
 func isHTML(t []byte) bool {

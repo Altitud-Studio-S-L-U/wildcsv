@@ -97,8 +97,49 @@ func classify(cell string, quoted bool) (ValueKind, int) {
 	return ValueOther, decUnknown
 }
 
+// lowerASCII returns s in lower case without allocating when s is ASCII and
+// at most 8 bytes long, the only strings the word lists below can match; ok is
+// false otherwise, and the caller falls back to strings.ToLower.
+func lowerASCII(s string, buf *[8]byte) (string, bool) {
+	if len(s) > len(buf) {
+		return "", false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= utf8.RuneSelf {
+			return "", false
+		}
+		if c >= 65 && c <= 90 {
+			c += 32
+		}
+		buf[i] = c
+	}
+	return string(buf[:len(s)]), true
+}
+
+// lower is strings.ToLower, cheaper for short ASCII words.
+func lower(s string, buf *[8]byte) string {
+	if l, ok := lowerASCII(s, buf); ok {
+		return l
+	}
+	if isASCIIString(s) {
+		return "" // longer than any word looked up: matches none
+	}
+	return strings.ToLower(s)
+}
+
+func isASCIIString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
 func isNull(s string) bool {
-	switch strings.ToLower(s) {
+	var buf [8]byte
+	switch lower(s, &buf) {
 	case "na", "n/a", "nan", "null", "nil", "none", "-":
 		return true
 	}
@@ -106,7 +147,8 @@ func isNull(s string) bool {
 }
 
 func isBoolean(s string) bool {
-	switch strings.ToLower(s) {
+	var buf [8]byte
+	switch lower(s, &buf) {
 	case "true", "false", "yes", "no":
 		return true
 	}
@@ -301,9 +343,8 @@ func twoDigitsIn(s string, max int) bool {
 // isTime recognises H:MM or HH:MM with optional seconds, fraction, AM or PM,
 // and zone.
 func isTime(s string) bool {
-	upper := strings.ToUpper(s)
 	ampm := false
-	if strings.HasSuffix(upper, "AM") || strings.HasSuffix(upper, "PM") {
+	if hasSuffixAMPM(s) {
 		ampm = true
 		s = strings.TrimSuffix(s[:len(s)-2], " ")
 	}
@@ -362,13 +403,47 @@ func isURL(s string) bool {
 	if hasSpace(s) {
 		return false
 	}
-	lower := strings.ToLower(s)
+	low := s
+	if !isASCIIString(s) {
+		low = strings.ToLower(s)
+	}
 	for _, p := range []string{"http://", "https://", "ftp://", "www."} {
-		if strings.HasPrefix(lower, p) && len(s) > len(p) {
+		if len(s) > len(p) && hasPrefixLowerASCII(low, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// hasPrefixLowerASCII reports whether s starts with p, which is lower-case
+// ASCII, ignoring the case of ASCII letters in s.
+func hasPrefixLowerASCII(s, p string) bool {
+	if len(s) < len(p) {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := s[i]
+		if c >= 65 && c <= 90 {
+			c += 32
+		}
+		if c != p[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// hasSuffixAMPM reports whether strings.ToUpper(s) ends in AM or PM.
+func hasSuffixAMPM(s string) bool {
+	if !isASCIIString(s) {
+		u := strings.ToUpper(s)
+		return strings.HasSuffix(u, "AM") || strings.HasSuffix(u, "PM")
+	}
+	if len(s) < 2 {
+		return false
+	}
+	a, m := s[len(s)-2]&^32, s[len(s)-1]&^32
+	return (a == 65 || a == 80) && m == 77
 }
 
 func isEmail(s string) bool {

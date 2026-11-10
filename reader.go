@@ -34,6 +34,7 @@ type Reader struct {
 	sc       *scanner  // reads the text, unless par does
 	par      *parallel // reads the text with Options.Concurrency goroutines
 	det      *Detection
+	describe func() // completes det on the first call to Detection
 	reuse    bool
 	record   []string
 	slices   [][]byte
@@ -54,7 +55,7 @@ type Reader struct {
 // uses once the input proves large; autoHandOver is when it decides.
 var (
 	autoWorkers  = min(runtime.GOMAXPROCS(0), 8)
-	autoHandOver = int64(1 << 20)
+	autoHandOver = int64(128 << 10)
 )
 
 // NewReader detects the kind, encoding and dialect of r from a sample, then
@@ -73,14 +74,14 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	det, dec, err := detect(head, complete, s)
+	det, dec, describe, err := detect(head, complete, s, true)
 	if err != nil {
 		return nil, err
 	}
 	if s.Dialect == nil && det.Kind != KindDelimited && det.Kind != KindEmpty {
 		return nil, &KindError{Kind: det.Kind}
 	}
-	rd := &Reader{det: det, reuse: s.ReuseRecord, encoding: dec.enc}
+	rd := &Reader{det: det, describe: describe, reuse: s.ReuseRecord, encoding: dec.enc}
 	var body io.Reader
 	if dec.enc == CustomDecoding {
 		body = s.Decode(io.MultiReader(&sliceReader{b: head}, r))
@@ -145,7 +146,16 @@ func readHead(r io.Reader, n int) ([]byte, bool, error) {
 }
 
 // Detection returns the report of the sample the Reader was built from.
-func (r *Reader) Detection() *Detection { return r.det }
+//
+// With Options.Dialect declared, the header guess and the columns are worked
+// out on the first call, so a Reader that never asks does not pay for them.
+func (r *Reader) Detection() *Detection {
+	if r.describe != nil {
+		r.describe()
+		r.describe = nil
+	}
+	return r.det
+}
 
 // Read returns the next record. It returns io.EOF at the end of the input and
 // a [*ParseError] for a problem in the data, after which it can be called
