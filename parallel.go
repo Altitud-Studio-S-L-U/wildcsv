@@ -28,7 +28,7 @@ import (
 // returned last.
 
 // chunkBytes is the size the producer aims for. Tests make it small.
-var chunkBytes = 256 << 10
+var chunkBytes = 128 << 10
 
 // errChunkEnd is what a worker's scanner meets at the end of a chunk that
 // does not end the input. The scanner treats it as a read error, so it stops
@@ -82,32 +82,39 @@ type scanState struct {
 	recNo     int
 }
 
-type parallel struct {
+// pipeline is what the producer and the workers share. It holds nothing that
+// leads back to the Reader, Options.Warn included, so that an abandoned
+// Reader becomes unreachable and its cleanup stops them.
+type pipeline struct {
 	src     io.Reader
 	dialect Dialect
 	lim     Limits
 	strict  bool
-	warn    func(*ParseError)
 	skip    int
 	workers int
 	size    int  // chunkBytes when the Reader was made
 	reuse   bool // records may share one array of strings
+	strs    bool // workers make strings
 
 	// Where the text handed over starts, when a sequential Reader hands over
 	// in the middle of the input.
-	startBase  int64
-	startLine  int
+	startBase int64
+	startLine int
+
+	jobs  chan *chunk
+	order chan *chunk
+	free  chan *chunk // chunks the consumer is done with
+	quit  chan struct{}
+	once  sync.Once
+}
+
+// parallel is the consumer, in the goroutine that calls Read.
+type parallel struct {
+	*pipeline
+	warn       func(*ParseError)
+	started    bool
 	startRecNo int
 
-	started bool
-	strs    bool // workers make strings
-	jobs    chan *chunk
-	order   chan *chunk
-	free    chan *chunk // chunks the consumer is done with
-	quit    chan struct{}
-	once    sync.Once
-
-	// The consumer, in the goroutine that calls Read.
 	begun     bool
 	ahead     []*chunk // taken from order and not finished; ahead[0] is current
 	ready     bool     // ahead[0] has been read by its worker
@@ -143,9 +150,11 @@ type parallel struct {
 
 func newParallel(src io.Reader, d Dialect, s *settings, workers int) *parallel {
 	return &parallel{
-		src: src, dialect: d, lim: s.lim, strict: s.Strict, warn: s.Warn,
-		skip: s.SkipLines, workers: workers, reuse: s.ReuseRecord, size: chunkBytes, startLine: 1,
-		quit: make(chan struct{}),
+		pipeline: &pipeline{
+			src: src, dialect: d, lim: s.lim, strict: s.Strict, skip: s.SkipLines, workers: workers,
+			reuse: s.ReuseRecord, size: chunkBytes, startLine: 1, quit: make(chan struct{}),
+		},
+		warn: s.Warn,
 	}
 }
 
@@ -155,12 +164,13 @@ func (p *parallel) start(strs bool) {
 	p.started, p.strs = true, strs
 	p.jobs = make(chan *chunk, p.workers)
 	p.order = make(chan *chunk, p.workers+1)
-	p.free = make(chan *chunk, 2*p.workers+4)
-	go p.produce()
-	for range p.workers {
+	p.free = make(chan *chunk, p.workers+4)
+	pl := p.pipeline // the goroutines see only the pipeline
+	go pl.produce()
+	for range pl.workers {
 		go func() {
-			for c := range p.jobs {
-				p.parse(c)
+			for c := range pl.jobs {
+				pl.parse(c)
 			}
 		}()
 	}
@@ -168,13 +178,13 @@ func (p *parallel) start(strs bool) {
 
 // close stops the goroutines. A producer blocked in a Read of the source
 // stops when that Read returns.
-func (p *parallel) close() {
+func (p *pipeline) close() {
 	p.once.Do(func() { close(p.quit) })
 }
 
 // getChunk returns an empty chunk, reusing one the consumer is done with
 // when it can.
-func (p *parallel) getChunk() *chunk {
+func (p *pipeline) getChunk() *chunk {
 	var c *chunk
 	select {
 	case c = <-p.free:
@@ -185,15 +195,15 @@ func (p *parallel) getChunk() *chunk {
 	default:
 		c = &chunk{}
 	}
-	if cap(c.buf) < 2*p.size {
-		c.buf = make([]byte, 0, 2*p.size)
+	if cap(c.buf) < p.size+p.size/4 {
+		c.buf = make([]byte, 0, p.size+p.size/4)
 	}
 	c.done = make(chan struct{})
 	return c
 }
 
 // release offers a chunk for reuse.
-func (p *parallel) release(c *chunk) {
+func (p *pipeline) release(c *chunk) {
 	select {
 	case p.free <- c:
 	default:
@@ -201,7 +211,7 @@ func (p *parallel) release(c *chunk) {
 }
 
 // send hands a chunk to the consumer and to a worker.
-func (p *parallel) send(c *chunk) bool {
+func (p *pipeline) send(c *chunk) bool {
 	select {
 	case p.order <- c:
 	case <-p.quit:
@@ -217,7 +227,7 @@ func (p *parallel) send(c *chunk) bool {
 }
 
 // produce reads the text and cuts it into chunks.
-func (p *parallel) produce() {
+func (p *pipeline) produce() {
 	defer close(p.jobs)
 	defer close(p.order)
 	cur := p.getChunk()
@@ -323,7 +333,7 @@ func (p *parallel) produce() {
 // feed at which the quotes balance, counting from a start where they balance
 // unless odd; or -1 when there is none. It also returns whether the quotes are
 // odd at the end of buf, which a forced cut carries on.
-func (p *parallel) cut(buf []byte, odd bool) (int, bool) {
+func (p *pipeline) cut(buf []byte, odd bool) (int, bool) {
 	q := p.dialect.Quote
 	end := bytes.LastIndexByte(buf, '\n')
 	if q == 0 {
@@ -361,7 +371,7 @@ func countQuotes(b []byte, q rune) int {
 var newlineByte = []byte{'\n'}
 
 // parse reads one chunk.
-func (p *parallel) parse(c *chunk) {
+func (p *pipeline) parse(c *chunk) {
 	defer close(c.done)
 	select {
 	case <-p.quit:
@@ -421,7 +431,7 @@ func (p *parallel) parse(c *chunk) {
 
 // build stores the record the scanner holds in the chunk, as the consumer
 // will hand it out, and returns where its fields are in strs or views.
-func (p *parallel) build(c *chunk, sc *scanner, lines int) (int32, int32) {
+func (p *pipeline) build(c *chunk, sc *scanner, lines int) (int32, int32) {
 	n := len(sc.fields)
 	first := len(c.recs) == 0
 	switch {
@@ -536,6 +546,18 @@ func (p *parallel) setLastChunk(c *chunk) {
 		p.release(p.lastChunk)
 	}
 	p.lastChunk, p.lastLeft = c, false
+	p.posChunk = nil // a recycled chunk may come back at the same address
+}
+
+// drop lets go of a chunk the fallback has read past, once its worker is done
+// with it.
+func (p *parallel) drop(c *chunk) {
+	<-c.done
+	if c == p.lastChunk {
+		p.lastLeft = true
+	} else {
+		p.release(c)
+	}
 }
 
 // advance moves from the finished current chunk to the next one, which
@@ -673,6 +695,14 @@ func (p *parallel) fallbackNext() error {
 // chunk starts, and makes that chunk current.
 func (p *parallel) resync() {
 	at := p.fb.abs()
+	// The fallback reads one chunk at a time, so it often stands exactly at
+	// the end of the last chunk it took, where the next one starts: take that
+	// one now, or the match would be missed and the fallback never end.
+	if last := p.ahead[len(p.ahead)-1]; !last.last && last.base+int64(len(last.text)) == at {
+		if next, ok := <-p.order; ok {
+			p.ahead = append(p.ahead, next)
+		}
+	}
 	for i := 1; i < len(p.ahead); i++ {
 		c := p.ahead[i]
 		if c.base > at {
@@ -681,6 +711,9 @@ func (p *parallel) resync() {
 		if c.base == at {
 			p.baseLine = p.fb.line
 			p.baseRecNo = p.fb.recNo
+			for _, d := range p.ahead[:i] {
+				p.drop(d)
+			}
 			p.ahead = p.ahead[i:]
 			p.idx, p.didx, p.ready = 0, 0, false
 			p.fb = nil
@@ -689,6 +722,7 @@ func (p *parallel) resync() {
 	}
 	// Chunks the scanner has read past and that start before it are done.
 	for p.fbPos.chunk > 0 && len(p.ahead) > 1 && p.ahead[1].base < at {
+		p.drop(p.ahead[0])
 		p.ahead = p.ahead[1:]
 		p.fbPos.chunk--
 	}

@@ -149,17 +149,20 @@ func (c *utf16Conv) convert(dst, src []byte, final bool) ([]byte, int) {
 // copy; anything else means Windows-1252 from there on. Everything before that
 // byte reads the same in both encodings.
 type lateReader struct {
-	src     io.Reader
-	decided atomic.Pointer[Encoding] // read by Stats, possibly from another goroutine
-	rest    io.Reader                // what to read once decided
+	src       io.Reader
+	passed    int64                    // bytes passed through before the decision
+	decidedAt atomic.Int64             // offset of the byte the decision was made on
+	decided   atomic.Pointer[Encoding] // read by Stats, possibly from another goroutine
+	rest      io.Reader                // what to read once decided
 }
 
-// encoding returns the encoding decided on, or "".
-func (l *lateReader) encoding() Encoding {
+// encoding returns the encoding decided on, or "", and the offset in the
+// text of the byte it was decided on.
+func (l *lateReader) encoding() (Encoding, int64) {
 	if e := l.decided.Load(); e != nil {
-		return *e
+		return *e, l.decidedAt.Load()
 	}
-	return ""
+	return "", 0
 }
 
 func (l *lateReader) Read(p []byte) (int, error) {
@@ -169,8 +172,10 @@ func (l *lateReader) Read(p []byte) (int, error) {
 	n, err := l.src.Read(p)
 	k := asciiPrefix(p[:n])
 	if k == n {
+		l.passed += int64(n)
 		return n, err
 	}
+	l.decidedAt.Store(l.passed + int64(k))
 	// Decide on the sequence at k, reading the rest of it if the read cut it.
 	var look [utf8.UTFMax]byte
 	m := copy(look[:], p[k:n])

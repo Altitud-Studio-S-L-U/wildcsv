@@ -18,6 +18,17 @@ type Stats struct {
 
 // Reader streams the records of delimited text.
 //
+// Options.Concurrency sets how many goroutines read it. With 1, the goroutine
+// that calls Read does. With n above 1, a producer goroutine reads the
+// underlying reader and cuts the text into chunks, n goroutines read the
+// chunks, and Read returns their records in order. With 0, the default, the
+// calling goroutine reads the first megabyte and, if the input goes on, hands
+// over to min(GOMAXPROCS, 8) goroutines. Whatever the setting, the records,
+// errors, warnings and their order, counts, positions and offsets are the
+// same, and Options.Warn is called from the goroutine that calls Read. A
+// parallel Reader stops its goroutines at the end of the input, on an error
+// that ends it, on Close, or once it is unreachable.
+//
 // A Reader is not safe for concurrent use. Readers do not share state.
 type Reader struct {
 	sc       *scanner  // reads the text, unless par does
@@ -87,7 +98,7 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error) {
 	}
 	if s.Concurrency > 1 && !complete {
 		rd.par = newParallel(body, det.Dialect, s, s.Concurrency)
-		runtime.AddCleanup(rd, func(p *parallel) { p.close() }, rd.par)
+		runtime.AddCleanup(rd, func(p *pipeline) { p.close() }, rd.par.pipeline)
 		return rd, nil
 	}
 	rd.sc = newScanner(body, det.Dialect, s.lim, s.Strict)
@@ -116,7 +127,7 @@ func (r *Reader) handToParallel() {
 	p.bare, p.stray, p.invalid = sc.bare, sc.stray, sc.invalid
 	p.ownFields = append(p.ownFields, r.fields...)
 	r.par, r.sc, r.settings = p, nil, nil
-	runtime.AddCleanup(r, func(p *parallel) { p.close() }, p)
+	runtime.AddCleanup(r, func(p *pipeline) { p.close() }, p.pipeline)
 }
 
 // readHead reads up to n+1 bytes, so that the caller knows whether n bytes
@@ -277,7 +288,9 @@ func (r *Reader) accept() {
 // an error that is not a [*ParseError], stops the goroutines as well, and so
 // does the garbage collector once the Reader is unreachable. After Close the
 // read methods return [ErrClosed], or the error that ended the input if one
-// had. Close does not close the underlying reader, and always returns nil.
+// had. A producer blocked in a Read of the underlying reader stops when that
+// Read returns. Close does not close the underlying reader, and always
+// returns nil.
 func (r *Reader) Close() error {
 	if r.par != nil {
 		r.par.close()
@@ -337,8 +350,10 @@ func (r *Reader) Stats() Stats {
 	} else {
 		st.BareQuotes, st.StrayQuotes, st.InvalidUTF8 = r.sc.bare, r.sc.stray, r.sc.invalid
 	}
+	// The decision counts once reading has reached the byte it was made on,
+	// however far ahead the buffers or the goroutines have read.
 	if r.late != nil {
-		if e := r.late.encoding(); e != "" {
+		if e, at := r.late.encoding(); e != "" && (r.offset > at || r.done != nil) {
 			st.Encoding = e
 		}
 	}
