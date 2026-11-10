@@ -48,6 +48,7 @@ type scanner struct {
 	recStart     int64
 	recLine      int
 	recLineStart int64
+	recQuoted    bool   // the record starts with an opening quote
 	rec          []byte // field contents, concatenated
 	ends         []int  // end of each field in rec
 	fpos         []fieldPos
@@ -180,23 +181,6 @@ func (s *scanner) atEscape() bool {
 	return s.matchAt(s.esc)
 }
 
-// validPrefix returns how much of a scanned stretch is valid UTF-8. A
-// sequence cut by the end of the buffer counts as not valid yet, so the slow
-// path completes it after a refill.
-func validPrefix(b []byte) int {
-	if utf8.Valid(b) {
-		return len(b)
-	}
-	for i := 0; i < len(b); {
-		r, size := utf8.DecodeRune(b[i:])
-		if r == utf8.RuneError && size <= 1 {
-			return i
-		}
-		i += size
-	}
-	return len(b)
-}
-
 func (s *scanner) newline() {
 	s.line++
 	s.lineStart = s.abs()
@@ -273,6 +257,11 @@ func (s *scanner) defect(err error, quoted bool) error {
 	return nil
 }
 
+// recordTooLarge reports ErrRecordTooLarge at the start of the record.
+func (s *scanner) recordTooLarge() error {
+	return s.fail(ErrRecordTooLarge, s.recStart, s.recLine, s.recLineStart, s.recQuoted)
+}
+
 func (s *scanner) overRecord() bool {
 	return s.abs()-s.recStart > int64(s.lim.MaxRecordBytes)
 }
@@ -296,7 +285,7 @@ func (s *scanner) check(fieldStart int, start int64, line int, lineStart int64, 
 		return s.fail(ErrFieldTooLarge, start, line, lineStart, quoted)
 	}
 	if s.overRecord() {
-		return s.fail(ErrRecordTooLarge, s.recStart, s.recLine, s.recLineStart, false)
+		return s.recordTooLarge()
 	}
 	return nil
 }
@@ -305,7 +294,9 @@ func (s *scanner) check(fieldStart int, start int64, line int, lineStart int64, 
 // above, replacing an invalid sequence with U+FFFD. A run of invalid bytes
 // becomes one replacement and counts once.
 func (s *scanner) utf8Char(quoted bool) error {
-	s.ensure(utf8.UTFMax)
+	if !s.ensure(utf8.UTFMax) && s.rerr != nil && !utf8.FullRune(s.buf[s.pos:s.end]) {
+		return s.rerr
+	}
 	r, size := utf8.DecodeRune(s.buf[s.pos:s.end])
 	if r != utf8.RuneError || size > 1 {
 		s.rec = append(s.rec, s.buf[s.pos:s.pos+size]...)
@@ -358,23 +349,28 @@ func (s *scanner) readRecord() error {
 	s.ends = s.ends[:0]
 	s.fpos = s.fpos[:0]
 	s.quoted = s.quoted[:0]
+	s.recQuoted = false
 	for {
-		if len(s.ends) == s.lim.MaxFields {
-			return s.fail(ErrTooManyFields, s.abs(), s.line, s.lineStart, false)
-		}
 		if s.skipSpace {
 			for s.ensure(1) && s.buf[s.pos] == ' ' {
 				s.pos++
 				if s.overRecord() {
-					return s.fail(ErrRecordTooLarge, s.recStart, s.recLine, s.recLineStart, false)
+					return s.recordTooLarge()
 				}
 			}
 		}
 		start, line, lineStart := s.abs(), s.line, s.lineStart
+		quoted := s.atQuote()
+		if len(s.ends) == s.lim.MaxFields {
+			return s.fail(ErrTooManyFields, start, line, lineStart, quoted)
+		}
+		if len(s.ends) == 0 && quoted && start == s.recStart {
+			s.recQuoted = true
+		}
 		s.fpos = append(s.fpos, fieldPos{line: line, col: int(start-lineStart) + 1})
 		var more bool
 		var err error
-		if s.atQuote() {
+		if quoted {
 			s.quoted = append(s.quoted, true)
 			more, err = s.quotedField(start, line, lineStart)
 		} else {
@@ -406,7 +402,7 @@ func (s *scanner) endField() (bool, error) {
 	}
 	s.pos += len(s.delim)
 	if s.overRecord() {
-		return false, s.fail(ErrRecordTooLarge, s.recStart, s.recLine, s.recLineStart, false)
+		return false, s.recordTooLarge()
 	}
 	return true, nil
 }
@@ -422,22 +418,27 @@ func (s *scanner) atFieldEnd() bool {
 }
 
 // scan returns the end of the stretch from pos that holds no byte of table
-// and is valid UTF-8, bounded by the record limit.
+// and is valid UTF-8, bounded by the record limit. It reads each byte once
+// and stops at an invalid or cut sequence, which the slow path handles, so
+// invalid input costs no rescanning.
 func (s *scanner) scan(table *[256]bool) int {
 	i, lim := s.pos, min(s.end, s.pos+s.room())
-	var high byte
 	for i < lim {
 		c := s.buf[i]
 		if table[c] {
 			break
 		}
-		high |= c
-		i++
+		if c < utf8.RuneSelf {
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRune(s.buf[i:s.end])
+		if r == utf8.RuneError && size <= 1 {
+			break
+		}
+		i += size
 	}
-	if high < 0x80 {
-		return i
-	}
-	return s.pos + validPrefix(s.buf[s.pos:i])
+	return i
 }
 
 func (s *scanner) unquotedField(start int64, line int, lineStart int64) (bool, error) {
@@ -461,7 +462,7 @@ func (s *scanner) unquotedField(start int64, line int, lineStart int64) (bool, e
 		case s.delim1 && b == s.delimB:
 			s.pos++
 			if s.overRecord() {
-				return false, s.fail(ErrRecordTooLarge, s.recStart, s.recLine, s.recLineStart, false)
+				return false, s.recordTooLarge()
 			}
 			return true, nil
 		case b == '\n' || b == '\r' || s.atDelim():
@@ -559,6 +560,9 @@ func (s *scanner) quotedField(start int64, line int, lineStart int64) (bool, err
 func (s *scanner) afterQuote() (more, closed bool, err error) {
 	qAt, qLine, qLineStart := s.abs(), s.line, s.lineStart
 	s.pos += len(s.quote)
+	if s.overRecord() {
+		return false, true, s.recordTooLarge()
+	}
 	if s.atQuote() {
 		s.rec = append(s.rec, s.quote...)
 		s.pos += len(s.quote)
@@ -574,7 +578,7 @@ func (s *scanner) afterQuote() (more, closed bool, err error) {
 			s.pos++
 			spaces++
 			if s.overRecord() {
-				return false, true, s.fail(ErrRecordTooLarge, s.recStart, s.recLine, s.recLineStart, false)
+				return false, true, s.recordTooLarge()
 			}
 		}
 		if spaces > 0 && s.atFieldEnd() {

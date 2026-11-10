@@ -59,6 +59,12 @@ func (d *decoder) Read(p []byte) (int, error) {
 
 var replacement = []byte(string(utf8.RuneError))
 
+// invalidUnit stands for an unpaired surrogate or a trailing odd byte in
+// UTF-16. It is three bytes that are not UTF-8, as long as the U+FFFD that
+// replaces it, so the scanner replaces, counts and reports it where it
+// reads it, as it does invalid UTF-8, and positions match the text returned.
+var invalidUnit = []byte{0xFF, 0xFF, 0xFF}
+
 // cp1252High maps bytes 0x80 to 0x9F as the WHATWG Encoding Standard does;
 // the five bytes Windows-1252 leaves undefined map to the C1 control with the
 // same value.
@@ -86,10 +92,9 @@ func (cp1252Conv) convert(dst, src []byte, _ bool) ([]byte, int) {
 }
 
 // utf16Conv decodes UTF-16; unpaired surrogates and a trailing odd byte become
-// U+FFFD and are counted.
+// invalidUnit.
 type utf16Conv struct {
 	bigEndian bool
-	invalid   int64
 }
 
 func (c *utf16Conv) unit(b []byte) rune {
@@ -109,8 +114,7 @@ func (c *utf16Conv) convert(dst, src []byte, final bool) ([]byte, int) {
 				if !final {
 					return dst, i
 				}
-				dst = append(dst, replacement...)
-				c.invalid++
+				dst = append(dst, invalidUnit...)
 				i += 2
 				continue
 			}
@@ -119,13 +123,11 @@ func (c *utf16Conv) convert(dst, src []byte, final bool) ([]byte, int) {
 				dst = utf8.AppendRune(dst, 0x10000+(u-0xD800)<<10+(u2-0xDC00))
 				i += 4
 			} else {
-				dst = append(dst, replacement...)
-				c.invalid++
+				dst = append(dst, invalidUnit...)
 				i += 2
 			}
 		case u >= 0xDC00 && u < 0xE000:
-			dst = append(dst, replacement...)
-			c.invalid++
+			dst = append(dst, invalidUnit...)
 			i += 2
 		default:
 			dst = utf8.AppendRune(dst, u)
@@ -133,8 +135,7 @@ func (c *utf16Conv) convert(dst, src []byte, final bool) ([]byte, int) {
 		}
 	}
 	if final && i < len(src) {
-		dst = append(dst, replacement...)
-		c.invalid++
+		dst = append(dst, invalidUnit...)
 		i = len(src)
 	}
 	return dst, i

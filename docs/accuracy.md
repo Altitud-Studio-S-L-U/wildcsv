@@ -167,6 +167,8 @@ The benchmark sets carry no ground truth for headers, so the header guess is not
 2026-11-10T16:29:54Z  dev      c715f5cb2375231787ee9a010421b40bc8fdcbac  weighted F1 0.9576
 2026-11-10T16:29:56Z  heldout  c715f5cb2375231787ee9a010421b40bc8fdcbac  weighted F1 0.9328
 2026-11-10T16:29:58Z  all      c715f5cb2375231787ee9a010421b40bc8fdcbac  weighted F1 0.9456
+2026-11-10T16:52:10Z  heldout  c6e3a76c5cb63333885f5d7346f58f6771b71a68  weighted F1 0.9367
+2026-11-10T16:52:13Z  all      c6e3a76c5cb63333885f5d7346f58f6771b71a68  weighted F1 0.9475
 ```
 
-The runs at 16:22 measured the NUL fix in the working tree on top of `9e78c8e`, before it was committed as `e878117`; the commit contains that change and nothing else. The runs on `c715f5c` measured the tie-rule change described under the method history, in the working tree; it was dropped and never committed.
+The runs at 16:22 measured the NUL fix in the working tree on top of `9e78c8e`, before it was committed as `e878117`; the commit contains that change and nothing else. The runs on `c715f5c` measured the tie-rule change described under the method history, in the working tree; it was dropped and never committed. The last two runs confirmed, on the working tree of the next commit, that fixes to the reader’s limits, positions and UTF-16 handling left every detection unchanged.

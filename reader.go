@@ -27,7 +27,6 @@ type Reader struct {
 	records   int64
 	offset    int64
 	late      *lateConv
-	utf16     *utf16Conv
 	encoding  Encoding
 	done      error
 }
@@ -63,8 +62,7 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error) {
 		body = io.MultiReader(&sliceReader{b: head[dec.bomLen:]}, r)
 		switch {
 		case dec.enc == UTF16LE || dec.enc == UTF16BE:
-			rd.utf16 = &utf16Conv{bigEndian: dec.enc == UTF16BE}
-			body = newDecoder(body, rd.utf16)
+			body = newDecoder(body, &utf16Conv{bigEndian: dec.enc == UTF16BE})
 		case dec.enc == Windows1252:
 			body = newDecoder(body, cp1252Conv{})
 		case dec.basis == BasisASCII:
@@ -180,9 +178,6 @@ func (r *Reader) Stats() Stats {
 		StrayQuotes: r.sc.stray,
 		InvalidUTF8: r.sc.invalid,
 		Encoding:    r.encoding,
-	}
-	if r.utf16 != nil {
-		st.InvalidUTF8 += r.utf16.invalid
 	}
 	if r.late != nil && r.late.decided != "" {
 		st.Encoding = r.late.decided

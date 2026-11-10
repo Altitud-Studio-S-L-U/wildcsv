@@ -89,7 +89,7 @@ The report states the basis of the decision (`declared`, `custom`, `bom`, `utf16
 
 **Late decision.** When the sample is pure ASCII, a large file may still hold `é` as the single byte `E9` a megabyte later. The reader therefore decides at the first byte that is not ASCII: if that byte starts a valid UTF-8 sequence, the input is UTF-8 from there on; otherwise the input is Windows-1252 from there on. Everything before that byte reads the same in both encodings, so the result equals decoding the whole file with the chosen encoding. The decision uses only that first sequence, so it does not depend on how the input happens to be split into reads. `Reader.Stats` reports the encoding finally used.
 
-**Guarantee.** Every string wildcsv returns is valid UTF-8. In UTF-8 input, an invalid sequence becomes U+FFFD and is counted, or is an error in strict mode. In UTF-16 input, an unpaired surrogate or a trailing odd byte becomes U+FFFD and is counted.
+**Guarantee.** Every string wildcsv returns is valid UTF-8. In UTF-8 input, an invalid sequence becomes U+FFFD, is counted and reported to `Options.Warn` with its position, or is an error in strict mode. In UTF-16 input, an unpaired surrogate or a trailing odd byte is handled the same way, as `ErrInvalidUTF8`. Adjacent invalid units or bytes form one run, which becomes one U+FFFD and counts once.
 
 **Other encodings.** `Options.Decode` takes any function that turns the source into UTF-8, such as a decoder from `golang.org/x/text`. wildcsv itself depends only on the standard library.
 

@@ -199,7 +199,7 @@ func FuzzDecode(f *testing.F) {
 		if !bytes.Equal(whole, one) {
 			t.Fatalf("whole %q, one byte %q", whole, one)
 		}
-		if which%4 != 3 && !utf8.Valid(whole) {
+		if which%4 == 0 && !utf8.Valid(whole) || (which%4 == 1 || which%4 == 2) && !utf8.Valid(bytes.ReplaceAll(whole, invalidUnit, nil)) {
 			t.Fatalf("output %q is not valid UTF-8", whole)
 		}
 	})
