@@ -27,7 +27,7 @@ Allocations are within 2% of `encoding/csv`'s: one string per record, which the 
 Where the difference comes from:
 
 - **Quoted fields** stop the scan at every quote and line break to decide between a doubled quote, a closing quote and a stray quote, and to count lines.
-- **Multi-byte text** is validated as UTF-8 as it is scanned, in one pass, so that invalid bytes cost no more than valid ones; `encoding/csv` does not validate what it returns.
+- **Multi-byte text** is validated as UTF-8 as it is scanned, in one pass; `encoding/csv` does not validate what it returns. Invalid bytes take a slower path that replaces and reports each run, but no byte is read twice: 256 KiB in which every other byte is invalid reads in about 21 ms, against 4 ms for valid text (`TestInvalidUTF8IsLinear`).
 - **Every field** checks the field and record limits and records its line and column.
 
 If you read trusted RFC 4180 files whose dialect you know, `encoding/csv` is faster and is the better choice.
