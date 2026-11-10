@@ -22,7 +22,7 @@ type Stats struct {
 // that calls Read does. With n above 1, a producer goroutine reads the
 // underlying reader and cuts the text into chunks, n goroutines read the
 // chunks, and Read returns their records in order. With 0, the default, the
-// calling goroutine reads the first megabyte and, if the input goes on, hands
+// calling goroutine reads the first 128 KiB and, if the input goes on, hands
 // over to min(GOMAXPROCS, 8) goroutines. Whatever the setting, the records,
 // errors, warnings and their order, counts, positions and offsets are the
 // same, and Options.Warn is called from the goroutine that calls Read. A

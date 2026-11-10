@@ -14,6 +14,7 @@ wildcsv is a Go library and a command for that intake step. It depends only on t
 - **What is this?** It recognises workbooks, archives, JSON, XML, HTML, PDF and binary data from the first bytes and names them instead of misreading them.
 - **How do I read it?** It detects the encoding and the dialect (delimiter, quote, escape, padding) from a 64 KiB sample, with a confidence margin and the runner-up dialects, and guesses the header and the kind of each column.
 - **Where is it broken?** It streams records holding one at a time, fails a field, a record or a field count as soon as it exceeds its limit, recovers at the next line, and reports every problem with its record, line, column and byte offset.
+- **How fast?** It scans eight bytes at a time, copies each record once, and spreads a large input over goroutines by default, returning the same records in the same order: 3.3 to 5 times as fast as `encoding/csv` on 32 MiB inputs, and up to 5.4 times with `ReadSlices`, which hands out fields without copying them.
 
 ## Install
 
@@ -46,7 +47,7 @@ for rec, err := range r.All() {
 }
 ```
 
-Pass `Options.Dialect` and `Options.Encoding` when you know them; nothing is then guessed. Reading is lenient by default: a quote that does not open, double or close a field is read as data, as in `"He said "hi" to me"`, and `Options.Warn` receives each such defect with its position. `Options.Strict` turns them into errors. See the [package documentation](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv) for runnable examples.
+Pass `Options.Dialect` and `Options.Encoding` when you know them; nothing is then guessed. `ReadSlices` returns fields that point into the reader's buffers, for code that parses each field at once; `Options.Concurrency` 1 keeps reading in one goroutine. Reading is lenient by default: a quote that does not open, double or close a field is read as data, as in `"He said "hi" to me"`, and `Options.Warn` receives each such defect with its position. `Options.Strict` turns them into errors. See the [package documentation](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv) for runnable examples.
 
 ## Inspect a file from the command line
 
@@ -103,7 +104,7 @@ When a large file's sample is plain ASCII, the choice between UTF-8 and Windows-
 | `MaxRecordBytes` | 4,194,304 | Bytes of one record, with its quotes and delimiters |
 | `MaxFields` | 16,384 | Fields in one record |
 
-A reader holds one record and fixed buffers, so its memory is bounded by `MaxRecordBytes` plus a constant whatever the input.
+A reader holds one record and fixed buffers, so its memory is bounded by `MaxRecordBytes` plus a constant whatever the input; reading in parallel adds a few chunks of up to 160 KiB per goroutine.
 
 ## How accurate detection is
 
@@ -114,11 +115,19 @@ Detection follows the table uniformity method of García (2024), measured on the
 | Held-out half, accuracy | 98.5% | 97.1% | 87.6% | 0.948 |
 | All files, accuracy | 98.0% | 96.8% | 91.6% | 0.959 |
 
-The best published figure of the Python reference implementation is a weighted F1 of 0.938, on all files. Detection takes a few milliseconds per file. The method, the protocol, the comparison with other tools and the kinds of file that still fail are in [docs/accuracy.md](docs/accuracy.md); the costs of reading against `encoding/csv` are in [docs/performance.md](docs/performance.md).
+The best published figure of the Python reference implementation is a weighted F1 of 0.938, on all files. Detection takes a few milliseconds per file. The method, the protocol, the comparison with other tools and the kinds of file that still fail are in [docs/accuracy.md](docs/accuracy.md).
 
-## When to use encoding/csv instead
+## How fast it reads
 
-If you produce the files yourself, or they are trusted RFC 4180 in UTF-8 with a known delimiter, use `encoding/csv`: it is faster (wildcsv takes 1.5 to 1.8 times as long to read) and part of the standard library. wildcsv is for the files you cannot vouch for.
+Throughput on generated 32 MiB inputs, windows/amd64, Intel Core i9-9900K, with the dialect given:
+
+| Input | `encoding/csv` | wildcsv `Read` | wildcsv `ReadSlices` | wildcsv `Read`, one goroutine |
+| --- | ---: | ---: | ---: | ---: |
+| plain ASCII fields | 390 MB/s | 1,959 MB/s | 2,119 MB/s | 435 MB/s |
+| quoted fields with line breaks | 340 MB/s | 1,352 MB/s | 1,493 MB/s | 334 MB/s |
+| accented and Japanese text | 445 MB/s | 1,479 MB/s | 1,938 MB/s | 357 MB/s |
+
+Inputs past 128 KiB are read in parallel by default. With one goroutine, wildcsv is about 20% slower than `encoding/csv` on text full of multi-byte characters, because it validates UTF-8 and `encoding/csv` does not; that also holds for such inputs under 128 KiB. If you read trusted RFC 4180 files of a few hundred kilobytes whose dialect you know, `encoding/csv` is as fast and part of the standard library. Method, scaling and memory are in [docs/performance.md](docs/performance.md).
 
 ## Documentation
 

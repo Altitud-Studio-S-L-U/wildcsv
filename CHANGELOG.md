@@ -10,7 +10,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - `NewReader` and `Reader`: streaming records of UTF-8, UTF-16 and Windows-1252 text, or of any encoding through `Options.Decode`, under limits on field size, record size and field count, with every problem reported as a `*ParseError` with its record, line, column and byte offset, and recovery at the next line.
 - Reading eight bytes at a time for records that lie wholly in the buffer, with the general path, which defines every result, taking any record the fast path does not handle.
 - `Reader.ReadSlices`, which returns the fields without copying them and allocates nothing once warmed up.
-- Parallel reading behind the same API: `Options.Concurrency` sets the goroutines, and its default, 0, hands over to min(GOMAXPROCS, 8) goroutines once an input passes its first megabyte. Results are those of one goroutine. `Reader.Close` and `ErrClosed` stop a parallel reader early.
+- Parallel reading behind the same API: `Options.Concurrency` sets the goroutines, and its default, 0, hands over to min(GOMAXPROCS, 8) goroutines once an input passes its first 128 KiB. Results are those of one goroutine. `Reader.Close` and `ErrClosed` stop a parallel reader early.
 - Lenient reading of quotes that neither open, double nor close a field, reported through `Options.Warn` and `Stats`; `Options.Strict` turns them and invalid UTF-8 into errors.
 - The `wildcsv` command with `inspect`, `check` and `convert`, versioned JSON output and documented exit statuses.
 - Detection lets the table of one column compete in samples of fewer than five line feeds, and ignores a delimiter that only ever starts lines.
