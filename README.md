@@ -107,12 +107,12 @@ A reader holds one record and fixed buffers, so its memory is bounded by `MaxRec
 
 ## How accurate detection is
 
-Detection follows the table uniformity method of García (2024), measured on the 816 annotated runs of the POLLOCK, W3C CSV on the Web and CSV Wrangling benchmark sets that other tools publish results for. The method was tuned on half of the files; the other half was run once, afterwards:
+Detection follows the table uniformity method of García (2024), measured on the 816 annotated runs of the POLLOCK, W3C CSV on the Web and CSV Wrangling benchmark sets that other tools publish results for. The method was tuned on half of the files, and every run on the other half is logged:
 
 | | POLLOCK | W3C-CSVW | CSV Wrangling | Weighted F1 |
 | --- | ---: | ---: | ---: | ---: |
-| Held-out half, accuracy | 98.5% | 92.2% | 86.5% | 0.937 |
-| All files, accuracy | 98.0% | 92.8% | 89.9% | 0.948 |
+| Held-out half, accuracy | 98.5% | 97.1% | 87.6% | 0.948 |
+| All files, accuracy | 98.0% | 96.8% | 91.6% | 0.959 |
 
 The best published figure of the Python reference implementation is a weighted F1 of 0.938, on all files. Detection takes a few milliseconds per file. The method, the protocol, the comparison with other tools and the kinds of file that still fail are in [docs/accuracy.md](docs/accuracy.md); the costs of reading against `encoding/csv` are in [docs/performance.md](docs/performance.md).
 

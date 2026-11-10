@@ -127,6 +127,10 @@ A candidate is a `Dialect`. Candidates are built from characters that occur in t
 
 Candidates are generated in a fixed order: delimiters in the order above, then double quote, no quote, apostrophe, then no escape before backslash, then `SkipInitialSpace` false before true. Between candidates with the same score, the one whose reading of the sample has fewer bare and stray quotes wins, and if they are still equal the earlier one in that order does. So a file whose double quotes are only inch marks is reported as unquoted, and a file that writes `\"` inside quoted fields is reported with the backslash as its escape. Scores tie when quoting does not change the table: a sample whose only quoted values hold unescaped quotes and no delimiter is reported as unquoted, which reads it the same way apart from the outer quotes.
 
+A delimiter that occurs only as the first character of lines is not a candidate: it separates nothing but an empty first field, as `#` does at the head of comment lines.
+
+The table of one column competes too, in samples of fewer than five line feeds: it is read with the first candidate delimiter, which does not occur in the sample, and comes last in the order below, so it loses ties. A character that splits two or three lines by chance must then read them more uniformly than leaving them whole does.
+
 If no candidate delimiter occurs in the sample, the input has one column and the dialect is the default: the first candidate delimiter, which is the comma unless `Options.Delimiters` says otherwise, and the double quote.
 
 ### 7.3 Cell kinds
@@ -223,7 +227,7 @@ One defect is an error in both modes: a quoted field that is still open at the e
 | `MaxRecordBytes` | 4,194,304 | Bytes of one record in the input, with its quotes and delimiters. |
 | `MaxFields` | 16,384 | Fields in one record. This is the number of columns of an Excel worksheet. |
 
-A zero value selects the default. A negative value, or a field limit above the record limit, is rejected. The reader holds one record and one read buffer, so its memory is bounded by `MaxRecordBytes` plus a constant.
+A zero value selects the default. A negative value, or a field limit above the record limit, is rejected. A reader in one goroutine holds one record and one read buffer, so its memory is bounded by `MaxRecordBytes` plus a constant; a parallel reader (section 8.6) holds a bounded number of chunks besides.
 
 An unbalanced quote in a large file therefore fails after `MaxFieldBytes` with an error that points at the opening quote, instead of reading the rest of the file into one field.
 
@@ -256,6 +260,16 @@ Lines count every line break, including those inside quoted fields and blank lin
 
 After an error the reader discards input up to the next line break, without interpreting quotes, and the next call continues from there. A program can therefore list every problem of a file in one pass. When the error fell inside a quoted field that spans several lines, the lines that follow may yield further errors or misaligned records until the quoting lines up again.
 
+### 8.6 Speed and concurrency
+
+How a record is found does not change what it is. Two mechanisms make reading faster, and both are held to the results of sections 8.1 to 8.5, byte for byte and position for position.
+
+**The fast path.** A record that lies wholly in the read buffer, with a single-byte delimiter and quote and no escape character, is read eight bytes at a time: each word is loaded once, every delimiter in it ends a field, and the first quote or line break ends the run of unquoted fields. The end of a long quoted field is found with `bytes.IndexByte`. The record is validated as UTF-8 once, and only if a byte of 0x80 or above was seen. Fields are offsets into the buffer, so a record is copied once, into the string its fields share, and doubled quotes are made single in place. Anything the fast path does not handle (a bare or stray quote, invalid UTF-8, spaces after a closing quote, a carriage return inside a quoted field, a record near a limit, a record cut by the end of the buffer) makes it give up having changed nothing, and the general path reads the record from its start. `FuzzFastPath` compares the two paths on every input it generates.
+
+**Parallel reading.** With `Options.Concurrency` above one, a producer goroutine reads the decoded text and cuts it into chunks of about 256 KiB, each ending just after a line feed at which the quote characters before it balance. Worker goroutines read the chunks with the same scanner, and `Read` returns their records in order. The cut is a guess, because a stray quote, an escaped quote or a line feed inside a quoted field can put it inside a record. Each worker therefore reports whether its chunk ended between two records. When one did not, the results of the chunks after it are set aside, and a scanner in the calling goroutine reads on from the last record the worker completed, across as many chunks as it takes, until a record ends exactly where a later chunk starts; from there that chunk's results hold. Records, errors, warnings and their order, counts, field positions and offsets are therefore those of one goroutine; `FuzzParallel` checks it with chunks of a few bytes. Workers build each record as `Read` or `ReadSlices` returns it, so the calling goroutine does a constant amount of work per record, and `Options.Warn` is still called from it, in order.
+
+**The default.** `Options.Concurrency` 0 reads the first megabyte in the calling goroutine and, if the input goes on, hands over between two records to min(GOMAXPROCS, 8) goroutines, carrying on offsets, lines, record numbers and counts. Small inputs pay nothing for goroutines and large ones read several times faster. `Concurrency` 1 keeps one goroutine. A parallel reader reads the underlying `io.Reader` from its producer goroutine, holds at most a few chunks per worker, and stops its goroutines at the end of the input, at an error that ends it, on `Close`, or when the garbage collector finds the `Reader` unreachable.
+
 ## 9. Go API
 
 ```go
@@ -266,10 +280,12 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error)
 
 func (r *Reader) Detection() *Detection
 func (r *Reader) Read() ([]string, error)
+func (r *Reader) ReadSlices() ([][]byte, error)
 func (r *Reader) All() iter.Seq2[[]string, error]
 func (r *Reader) FieldPos(field int) (line, column int)
 func (r *Reader) InputOffset() int64
 func (r *Reader) Stats() Stats
+func (r *Reader) Close() error
 ```
 
 ```go
@@ -283,6 +299,7 @@ type Options struct {
 	Strict      bool                      // report quoting defects and invalid UTF-8 as errors
 	Warn        func(*ParseError)         // called for each defect that lenient reading accepts
 	ReuseRecord bool                      // Read may return a slice that shares its backing array with the previous one
+	Concurrency int                       // goroutines that read the text: 0 adapts, 1 is sequential (section 8.6)
 	Limits      Limits
 }
 
@@ -338,7 +355,8 @@ Errors are compared with `errors.Is` and `errors.As`:
 | `*ParseError` | The data has a problem (section 8.4). It wraps one of `ErrBareQuote`, `ErrStrayQuote`, `ErrInvalidUTF8`, `ErrUnterminatedQuote`, `ErrFieldTooLarge`, `ErrRecordTooLarge`, `ErrTooManyFields`. |
 | `*KindError` | The input is not delimited text. It names the kind and wraps `ErrNotDelimited`. |
 | `*EncodingError` | The encoding is recognised but not read. It names the encoding and wraps `ErrUnsupportedEncoding`. |
-| `ErrInvalidOptions` | A limit is negative, the field limit exceeds the record limit, or the dialect is not valid. The returned error wraps it and says which. |
+| `ErrInvalidOptions` | A limit or `Concurrency` is negative, the field limit exceeds the record limit, or the dialect is not valid. The returned error wraps it and says which. |
+| `ErrClosed` | A read method is called after `Close`. |
 
 - A nil `*Options` and a zero `Options` both mean: detect everything, read leniently, default limits.
 - `Detect` reads at most `SampleBytes` + 1 bytes. It returns a report for every kind, and an error only when reading fails, the options are invalid or the encoding is UTF-32.
@@ -347,7 +365,9 @@ Errors are compared with `errors.Is` and `errors.As`:
 - `SkipLines` discards lines before the table. Detection skips them within the sample. Positions still count from the first line of the input.
 - `NewReader` returns a `*KindError`, which wraps `ErrNotDelimited`, for any kind other than `delimited` and `empty`, unless `Options.Dialect` is set: a caller who declares the dialect declares the input to be delimited text, and `Detection().Kind` still says what the sample looked like. An empty input gives a reader whose first `Read` returns `io.EOF`.
 - `Read` returns `io.EOF` at the end of the input and a `*ParseError` for a problem in the data; after a `*ParseError` it can be called again. Errors from the underlying reader are returned as they are.
+- `ReadSlices` is `Read` without copies: like the line `bufio.Reader.ReadSlice` returns, the fields point into the reader's buffers and are valid only until the next call to a read method, and the slice holding them is reused. Once the reader has warmed up it allocates nothing.
 - `All` yields each record or error in turn and stops at the end of the input or at an error that is not a `*ParseError`.
+- `Close` stops the goroutines of a parallel reader and marks any reader closed; later calls to a read method return `ErrClosed`, or the error that had ended the input. It does not close the underlying reader. A reader read to the end needs no `Close`.
 - `FieldPos` gives the position of a field of the record last returned. For a quoted field that is its opening quote.
 - A `Reader` is not safe for concurrent use. Readers do not share state.
 
