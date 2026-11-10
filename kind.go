@@ -139,12 +139,12 @@ func textKind(text []byte, complete bool) Kind {
 	return KindDelimited
 }
 
+// isBinaryText reports more than 1% of control characters. A NUL counts like
+// any other control: legacy exports pad fields with a few of them, while a
+// binary format has far more, or a signature rawKind recognises.
 func isBinaryText(text []byte) bool {
 	controls := 0
 	for _, c := range text {
-		if c == 0 {
-			return true
-		}
 		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != 0x1A {
 			controls++
 		}

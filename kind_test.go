@@ -63,6 +63,8 @@ func TestKinds(t *testing.T) {
 		{"K20a", []byte("<5,>3\n1,2\n"), KindDelimited},
 		{"K20b", []byte("<a,b>\n1,2\n"), KindDelimited},
 		{"controls below 1%", []byte(strings.Repeat("a,b\n", 100) + "\x01"), KindDelimited},
+		{"a few NUL bytes", []byte(strings.Repeat("a;b\n", 100) + "x\x00\x00;y\n"), KindDelimited},
+		{"many NUL bytes", []byte(strings.Repeat("a\x00\x00\x00", 100)), KindBinary},
 		{"UTF-16 text is not binary", []byte("\xFF\xFEa\x00,\x00b\x00"), KindDelimited},
 	}
 	for _, c := range cases {

@@ -65,7 +65,7 @@ Checks run in this order on the raw sample, and the first match wins.
 | `zstd` | `28 B5 2F FD`. |
 | `pdf` | `%PDF-`. |
 | `parquet` | `PAR1`. |
-| `binary` | After the encoding is decided (section 5): a NUL character, or more than 1% of characters that are C0 controls other than tab, line feed, carriage return, form feed and substitute (`0x1A`). |
+| `binary` | After the encoding is decided (section 5): more than 1% of characters that are C0 controls other than tab, line feed, carriage return, form feed and substitute (`0x1A`). NUL counts as such a control: some exporters pad fields with a few NUL bytes, while binary formats hold far more or carry one of the signatures above. |
 | `html` | The text starts, after white space, with `<!doctype html`, `<html`, `<head`, `<body` or `<table`, in any letter case. |
 | `xml` | The text starts, after white space, with `<?xml`, or with `<`, a tag name and then a space, `/` or `>`. |
 | `jsonl` | The text starts, after white space, with `{` or `[`, has at least two non-empty lines, and every complete non-empty line is a valid JSON object or array. |
