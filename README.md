@@ -118,7 +118,7 @@ The best published figure of the Python reference implementation is a weighted F
 
 ## When to use encoding/csv instead
 
-If you produce the files yourself, or they are trusted RFC 4180 in UTF-8 with a known delimiter, use `encoding/csv`: it is faster (wildcsv takes 1.4 to 1.8 times as long to read) and part of the standard library. wildcsv is for the files you cannot vouch for.
+If you produce the files yourself, or they are trusted RFC 4180 in UTF-8 with a known delimiter, use `encoding/csv`: it is faster (wildcsv takes 1.5 to 1.8 times as long to read) and part of the standard library. wildcsv is for the files you cannot vouch for.
 
 ## Documentation
 

@@ -18,16 +18,16 @@ windows/amd64, Go 1.27.3, 16 logical cores. Median of three runs, time to read t
 
 | Input | wildcsv | `encoding/csv` | wildcsv / `encoding/csv` |
 | --- | ---: | ---: | ---: |
-| plain | 29.1 ms | 21.3 ms | 1.37 |
-| quoted | 42.2 ms | 24.4 ms | 1.73 |
-| multibyte | 33.2 ms | 18.1 ms | 1.84 |
+| plain | 30.6 ms | 20.7 ms | 1.48 |
+| quoted | 41.4 ms | 23.6 ms | 1.75 |
+| multibyte | 32.0 ms | 18.4 ms | 1.74 |
 
 Allocations are within 2% of `encoding/csv`'s: one string per record, which the fields share, and one slice per record unless `ReuseRecord` is set.
 
 Where the difference comes from:
 
 - **Quoted fields** stop the scan at every quote and line break to decide between a doubled quote, a closing quote and a stray quote, and to count lines.
-- **Multi-byte text** is validated as UTF-8 in bulk for each stretch of field content; `encoding/csv` does not validate what it returns.
+- **Multi-byte text** is validated as UTF-8 as it is scanned, in one pass, so that invalid bytes cost no more than valid ones; `encoding/csv` does not validate what it returns.
 - **Every field** checks the field and record limits and records its line and column.
 
 If you read trusted RFC 4180 files whose dialect you know, `encoding/csv` is faster and is the better choice.
