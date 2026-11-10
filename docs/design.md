@@ -114,7 +114,7 @@ type Dialect struct {
 
 ### 7.1 Sample
 
-Detection reads at most `Limits.SampleBytes` bytes (64 KiB by default) and decodes them. Each candidate dialect reads the sample leniently, with the rules of section 8. If the input continues beyond the sample, the last, possibly incomplete record is dropped under each candidate. A record that a candidate cannot read, because of an unterminated quote or a limit, is left out of that candidate's table, and a candidate with no records scores zero. At most 50 records of the sample are scored.
+Detection reads at most `Limits.SampleBytes` bytes (64 KiB by default) and decodes them. Each candidate dialect reads the sample leniently, with the rules of section 8. If the input continues beyond the sample, the last, possibly incomplete record is dropped under each candidate. A record that a candidate cannot read, because of an unterminated quote or a limit, is left out of that candidate's table, and a candidate with no records scores zero. A record whose first field is unquoted and starts with `#` is left out of the table of every candidate whose delimiter is not `#`: comment lines read with another delimiter look like a column of text and hide the table's real shape. At most 50 records of the sample are scored.
 
 ### 7.2 Candidates
 

@@ -27,7 +27,8 @@ type sampleTable struct {
 
 // readTable reads up to max records of the sample with dialect d. When the
 // sample is not the whole input, its last record may be cut and is dropped.
-// Records that cannot be read are left out.
+// Records that cannot be read are left out, and so are records whose first
+// field is unquoted and starts with '#' when the delimiter is not '#'.
 func readTable(text []byte, d Dialect, lim Limits, complete bool, max int) *sampleTable {
 	sc := newSliceScanner(text, d, lim)
 	t := &sampleTable{}
@@ -38,6 +39,12 @@ func readTable(text []byte, d Dialect, lim Limits, complete bool, max int) *samp
 			break
 		}
 		if err != nil {
+			lastWasRecord = false
+			continue
+		}
+		// Comment lines read with any other delimiter look like a column of
+		// text; leaving them out lets the table show its real shape.
+		if d.Delimiter != '#' && !sc.quoted[0] && len(sc.rec) > 0 && sc.rec[0] == '#' {
 			lastWasRecord = false
 			continue
 		}
