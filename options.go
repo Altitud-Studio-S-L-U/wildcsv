@@ -55,6 +55,7 @@ type Options struct {
 	Strict      bool                      // report quoting defects and invalid UTF-8 as errors
 	Warn        func(*ParseError)         // called for each defect that lenient reading accepts
 	ReuseRecord bool                      // Read may return a slice that shares its backing array with the previous one
+	Concurrency int                       // goroutines that read the text; see below
 	Limits      Limits
 }
 
@@ -77,6 +78,9 @@ func (o *Options) settings() (*settings, error) {
 	s.lim = lim
 	if s.SkipLines < 0 {
 		return nil, invalidOptions("SkipLines must not be negative")
+	}
+	if s.Concurrency < 0 {
+		return nil, invalidOptions("Concurrency must not be negative")
 	}
 	if s.Dialect != nil {
 		if err := s.Dialect.validate(); err != nil {

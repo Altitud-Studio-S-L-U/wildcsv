@@ -44,19 +44,19 @@ func readTable(text []byte, d Dialect, lim Limits, complete bool, max int) *samp
 		}
 		// Comment lines read with any other delimiter look like a column of
 		// text; leaving them out lets the table show its real shape.
-		if d.Delimiter != '#' && !sc.quoted[0] && len(sc.rec) > 0 && sc.rec[0] == '#' {
+		if d.Delimiter != '#' && !sc.fields[0].quoted && sc.fields[0].end > sc.fields[0].start && sc.out[sc.fields[0].start] == '#' {
 			lastWasRecord = false
 			continue
 		}
-		str := string(sc.rec)
-		rec := make([]string, len(sc.ends))
-		prev := 0
-		for i, e := range sc.ends {
-			rec[i] = str[prev:e]
-			prev = e
+		str := sc.recordString()
+		rec := make([]string, len(sc.fields))
+		quoted := make([]bool, len(sc.fields))
+		for i, f := range sc.fields {
+			rec[i] = str[f.start:f.end]
+			quoted[i] = f.quoted
 		}
 		t.records = append(t.records, rec)
-		t.quoted = append(t.quoted, slices.Clone(sc.quoted))
+		t.quoted = append(t.quoted, quoted)
 		lastWasRecord = true
 	}
 	switch {

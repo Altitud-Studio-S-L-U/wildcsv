@@ -177,22 +177,22 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte("\x00a\xD8\x00"), uint8(2))
 	f.Add([]byte("ab\xC3\xA9\xFF"), uint8(3))
 	f.Fuzz(func(t *testing.T, data []byte, which uint8) {
-		mk := func() converter {
+		mk := func(src io.Reader) io.Reader {
 			switch which % 4 {
 			case 0:
-				return cp1252Conv{}
+				return newDecoder(src, cp1252Conv{})
 			case 1:
-				return &utf16Conv{}
+				return newDecoder(src, &utf16Conv{})
 			case 2:
-				return &utf16Conv{bigEndian: true}
+				return newDecoder(src, &utf16Conv{bigEndian: true})
 			}
-			return &lateConv{}
+			return &lateReader{src: src}
 		}
-		whole, err := io.ReadAll(newDecoder(bytes.NewReader(data), mk()))
+		whole, err := io.ReadAll(mk(bytes.NewReader(data)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		one, err := io.ReadAll(newDecoder(iotest.OneByteReader(bytes.NewReader(data)), mk()))
+		one, err := io.ReadAll(mk(iotest.OneByteReader(bytes.NewReader(data))))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,6 +262,71 @@ func FuzzDetect(f *testing.F) {
 			for _, f := range rec {
 				if !utf8.ValidString(f) {
 					t.Fatalf("field %q is not valid UTF-8", f)
+				}
+			}
+		}
+	})
+}
+
+// FuzzFastPath reads the same input by the general path alone and with the
+// fast path, with small buffers and short reads, and requires the same
+// records, positions, errors, warnings, counts and offsets.
+func FuzzFastPath(f *testing.F) {
+	addReadSeeds(f)
+	f.Add([]byte("a,b\r\n\"x\"\"y\",\"p\nq\"\r\nz,\"w\"\n"), uint16(0))
+	f.Add([]byte("a, \"b\" ,c\n  d,e\r"), uint16(0x40))
+	f.Add([]byte("id,name\n1,\"Ana \"\"la\"\" G\"\n2,Zoë\n3,\"long field of more than thirty-two bytes, with \"\"quotes\"\"\"\n"), uint16(0x8000))
+	f.Fuzz(func(t *testing.T, in []byte, flags uint16) {
+		opts := fuzzOptions(flags)
+		if flags&0x8000 != 0 {
+			opts.Limits = Limits{} // the defaults, which the fast path rarely gets near
+		}
+		set, err := opts.settings()
+		if err != nil {
+			t.Skip()
+		}
+		run := func(fast bool, size int, src io.Reader) []string {
+			sc := newScanner(src, *opts.Dialect, set.lim, opts.Strict)
+			sc.buf = make([]byte, size)
+			sc.fast = sc.fast && fast
+			var log []string
+			sc.warn = func(pe *ParseError) { log = append(log, fmt.Sprintf("warn %+v", *pe)) }
+			for range 4 * (len(in) + 2) {
+				err := sc.readRecord()
+				if err == io.EOF {
+					break
+				}
+				if pe, ok := errors.AsType[*ParseError](err); ok {
+					log = append(log, fmt.Sprintf("error %+v", *pe))
+					continue
+				}
+				if err != nil {
+					log = append(log, "fatal "+err.Error())
+					break
+				}
+				var b strings.Builder
+				fmt.Fprintf(&b, "record %d at %d line %d:", sc.recNo, sc.recStart, sc.recLine)
+				str := sc.recordString()
+				for _, fl := range sc.fields {
+					fmt.Fprintf(&b, " %q@%d:%d/%v", str[fl.start:fl.end], fl.line, fl.col, fl.quoted)
+				}
+				fmt.Fprintf(&b, " quoted %v next %d line %d:%d", sc.recQuoted, sc.abs(), sc.line, sc.lineStart)
+				log = append(log, b.String())
+			}
+			return append(log, fmt.Sprintf("counts %d %d %d", sc.bare, sc.stray, sc.invalid))
+		}
+		want := run(false, 64<<10, bytes.NewReader(in))
+		for _, size := range []int{16, 64 << 10} {
+			for _, mk := range []func(io.Reader) io.Reader{
+				func(r io.Reader) io.Reader { return r },
+				iotest.OneByteReader,
+				iotest.HalfReader,
+			} {
+				for _, fast := range []bool{false, true} {
+					got := run(fast, size, mk(bytes.NewReader(in)))
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("fast %v, buffer %d: got\n%s\nwant\n%s", fast, size, strings.Join(got, "\n"), strings.Join(want, "\n"))
+					}
 				}
 			}
 		}

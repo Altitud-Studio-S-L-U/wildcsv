@@ -1,7 +1,9 @@
 package wildcsv
 
 import (
+	"encoding/binary"
 	"io"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -141,41 +143,87 @@ func (c *utf16Conv) convert(dst, src []byte, final bool) ([]byte, int) {
 	return dst, i
 }
 
-// lateConv reads text whose sample was ASCII. At the first byte that is not
-// ASCII it decides: a valid UTF-8 sequence means UTF-8 from there on,
-// anything else means Windows-1252 from there on. Everything before that byte
-// reads the same in both encodings.
-type lateConv struct {
-	decided Encoding
+// lateReader reads text whose sample was ASCII. It passes the text through
+// untouched up to the first byte that is not ASCII, and there decides: a valid
+// UTF-8 sequence means UTF-8 from there on, still passed through without a
+// copy; anything else means Windows-1252 from there on. Everything before that
+// byte reads the same in both encodings.
+type lateReader struct {
+	src     io.Reader
+	decided atomic.Pointer[Encoding] // read by Stats, possibly from another goroutine
+	rest    io.Reader                // what to read once decided
 }
 
-func (c *lateConv) convert(dst, src []byte, final bool) ([]byte, int) {
-	switch c.decided {
-	case UTF8:
-		return append(dst, src...), len(src)
-	case Windows1252:
-		return cp1252Conv{}.convert(dst, src, final)
+// encoding returns the encoding decided on, or "".
+func (l *lateReader) encoding() Encoding {
+	if e := l.decided.Load(); e != nil {
+		return *e
 	}
+	return ""
+}
+
+func (l *lateReader) Read(p []byte) (int, error) {
+	if l.rest != nil {
+		return l.rest.Read(p)
+	}
+	n, err := l.src.Read(p)
+	k := asciiPrefix(p[:n])
+	if k == n {
+		return n, err
+	}
+	// Decide on the sequence at k, reading the rest of it if the read cut it.
+	var look [utf8.UTFMax]byte
+	m := copy(look[:], p[k:n])
+	var extra []byte
+	for empty := 0; m < utf8.UTFMax && !utf8.FullRune(look[:m]) && err == nil; {
+		var c int
+		c, err = l.src.Read(look[m:])
+		extra = append(extra, look[m:m+c]...)
+		m += c
+		if c == 0 && err == nil {
+			if empty++; empty >= 100 {
+				err = io.ErrNoProgress
+			}
+		}
+	}
+	after := l.src
+	if err != nil {
+		after = errReader{err}
+	}
+	if r, size := utf8.DecodeRune(look[:m]); r == utf8.RuneError && size <= 1 {
+		l.decided.Store(&windows1252)
+		pending := append(append([]byte(nil), p[k:n]...), extra...)
+		l.rest = newDecoder(io.MultiReader(&sliceReader{b: pending}, after), cp1252Conv{})
+		if k > 0 {
+			return k, nil
+		}
+		return l.rest.Read(p)
+	}
+	l.decided.Store(&utf8Enc)
+	l.rest = io.MultiReader(&sliceReader{b: extra}, after)
+	return n, nil
+}
+
+var windows1252, utf8Enc = Windows1252, UTF8
+
+// asciiPrefix returns the length of the longest prefix of b that is ASCII.
+func asciiPrefix(b []byte) int {
 	i := 0
-	for i < len(src) && src[i] < 0x80 {
+	for ; i+8 <= len(b); i += 8 {
+		if binary.LittleEndian.Uint64(b[i:])&swarHi != 0 {
+			break
+		}
+	}
+	for i < len(b) && b[i] < utf8.RuneSelf {
 		i++
 	}
-	dst = append(dst, src[:i]...)
-	if i == len(src) {
-		return dst, i
-	}
-	rest := src[i:]
-	if !utf8.FullRune(rest) && !final {
-		return dst, i
-	}
-	if r, size := utf8.DecodeRune(rest); r == utf8.RuneError && size <= 1 {
-		c.decided = Windows1252
-	} else {
-		c.decided = UTF8
-	}
-	dst, n := c.convert(dst, rest, final)
-	return dst, i + n
+	return i
 }
+
+// errReader returns err from every Read.
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 // decodeSample converts a raw sample for detection. A sequence cut by the end
 // of an incomplete sample is dropped.

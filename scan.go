@@ -6,10 +6,11 @@ import (
 	"unicode/utf8"
 )
 
-// fieldPos is the line and byte column where a field starts: its first
-// character, or its opening quote.
-type fieldPos struct {
-	line, col int
+// field is one field of the current record.
+type field struct {
+	start, end int  // the contents are out[start:end]
+	line, col  int  // where the field starts: its first byte or opening quote
+	quoted     bool // the field is quoted
 }
 
 // scanner reads records of one dialect from UTF-8 text. It is the only
@@ -49,17 +50,24 @@ type scanner struct {
 	recLine      int
 	recLineStart int64
 	recQuoted    bool   // the record starts with an opening quote
-	rec          []byte // field contents, concatenated
-	ends         []int  // end of each field in rec
-	fpos         []fieldPos
-	quoted       []bool
+	rec          []byte // field contents, concatenated, when they are copied
+	out          []byte // the text the fields point into
+	doubled      bool   // quoted fields in out still hold doubled quotes
+	ownBuf       bool   // buf belongs to the scanner, not to the caller
+	outAt        int    // where out starts in buf, or -1 when out is rec
+	between      bool   // the last call ended between records
+	hitEnd       bool   // the scanner wanted bytes past the end of a chunk
+	fields       []field
+
+	fast               bool // the dialect can use the fast path
+	repDelim, repQuote uint64
 
 	bare, stray, invalid int64
 	lastInvalid          int64
 }
 
 func newScanner(r io.Reader, d Dialect, lim Limits, strict bool) *scanner {
-	s := &scanner{r: r, buf: make([]byte, 64<<10), lim: lim, strict: strict, line: 1, lastInvalid: -1}
+	s := &scanner{r: r, buf: make([]byte, 64<<10), ownBuf: true, lim: lim, strict: strict, line: 1, lastInvalid: -1}
 	s.setDialect(d)
 	return s
 }
@@ -90,6 +98,7 @@ func (s *scanner) setDialect(d Dialect) {
 	// Bytes of 0x80 and above do not stop the scan: each scanned stretch is
 	// validated as UTF-8 at once, and only an invalid or cut sequence takes
 	// the slow path.
+	s.setFast()
 	for _, t := range []*[256]bool{&s.special, &s.qspecial} {
 		t['\r'] = true
 		t['\n'] = true
@@ -110,6 +119,9 @@ func (s *scanner) abs() int64 { return s.base + int64(s.pos) }
 // were added.
 func (s *scanner) fill() bool {
 	if s.eof || s.rerr != nil {
+		if s.rerr == errChunkEnd {
+			s.hitEnd = true
+		}
 		return false
 	}
 	if s.pos > 0 {
@@ -328,11 +340,13 @@ func (s *scanner) skipLeadingLines() {
 // readRecord reads the next record into rec and ends. It returns nil, io.EOF,
 // a read error, or a *ParseError after which it can be called again.
 func (s *scanner) readRecord() error {
+	s.between = false
 	if s.skipLines > 0 {
 		s.skipLeadingLines()
 	}
 	for {
 		if !s.ensure(1) {
+			s.between = true
 			return s.endErr()
 		}
 		b := s.buf[s.pos]
@@ -341,14 +355,23 @@ func (s *scanner) readRecord() error {
 		}
 		s.consumeLineBreak()
 	}
+	if s.fast {
+		res := s.fastRecord()
+		// A record cut by the end of the buffer gets one more try once the
+		// buffer is refilled.
+		if res == fastCut && s.rerr == nil && s.pos > 0 && s.fill() {
+			res = s.fastRecord()
+		}
+		if res == fastDone {
+			return nil
+		}
+	}
 	s.recNo++
 	s.recStart = s.abs()
 	s.recLine = s.line
 	s.recLineStart = s.lineStart
 	s.rec = s.rec[:0]
-	s.ends = s.ends[:0]
-	s.fpos = s.fpos[:0]
-	s.quoted = s.quoted[:0]
+	s.fields = s.fields[:0]
 	s.recQuoted = false
 	for {
 		if s.skipSpace {
@@ -361,27 +384,26 @@ func (s *scanner) readRecord() error {
 		}
 		start, line, lineStart := s.abs(), s.line, s.lineStart
 		quoted := s.atQuote()
-		if len(s.ends) == s.lim.MaxFields {
+		if len(s.fields) == s.lim.MaxFields {
 			return s.fail(ErrTooManyFields, start, line, lineStart, quoted)
 		}
-		if len(s.ends) == 0 && quoted && start == s.recStart {
+		if len(s.fields) == 0 && quoted && start == s.recStart {
 			s.recQuoted = true
 		}
-		s.fpos = append(s.fpos, fieldPos{line: line, col: int(start-lineStart) + 1})
+		s.fields = append(s.fields, field{start: len(s.rec), line: line, col: int(start-lineStart) + 1, quoted: quoted})
 		var more bool
 		var err error
 		if quoted {
-			s.quoted = append(s.quoted, true)
 			more, err = s.quotedField(start, line, lineStart)
 		} else {
-			s.quoted = append(s.quoted, false)
 			more, err = s.unquotedField(start, line, lineStart)
 		}
 		if err != nil {
 			return err
 		}
-		s.ends = append(s.ends, len(s.rec))
+		s.fields[len(s.fields)-1].end = len(s.rec)
 		if !more {
+			s.out, s.doubled, s.outAt = s.rec, false, -1
 			return nil
 		}
 	}
