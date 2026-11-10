@@ -1,0 +1,6 @@
+/dist/
+/bin/
+/wildcsv
+/wildcsv.exe
+*.test
+*.prof
