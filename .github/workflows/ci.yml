@@ -55,7 +55,7 @@ jobs:
       - run: ./bin/govulncheck ./...
       - name: Fuzz each target briefly
         run: |
-          for target in FuzzReader FuzzAgainstStdlib FuzzDecode FuzzDetect; do
+          for target in FuzzReader FuzzAgainstStdlib FuzzDecode FuzzDetect FuzzFastPath FuzzParallel; do
             go test -run '^$' -fuzz "^${target}\$" -fuzztime 20s .
           done
       - name: Release archives, dry run

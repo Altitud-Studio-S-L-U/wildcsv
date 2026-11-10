@@ -93,6 +93,12 @@ type parallel struct {
 	size    int  // chunkBytes when the Reader was made
 	reuse   bool // records may share one array of strings
 
+	// Where the text handed over starts, when a sequential Reader hands over
+	// in the middle of the input.
+	startBase  int64
+	startLine  int
+	startRecNo int
+
 	started bool
 	strs    bool // workers make strings
 	jobs    chan *chunk
@@ -138,7 +144,7 @@ type parallel struct {
 func newParallel(src io.Reader, d Dialect, s *settings, workers int) *parallel {
 	return &parallel{
 		src: src, dialect: d, lim: s.lim, strict: s.Strict, warn: s.Warn,
-		skip: s.SkipLines, workers: workers, reuse: s.ReuseRecord, size: chunkBytes,
+		skip: s.SkipLines, workers: workers, reuse: s.ReuseRecord, size: chunkBytes, startLine: 1,
 		quit: make(chan struct{}),
 	}
 }
@@ -216,7 +222,7 @@ func (p *parallel) produce() {
 	defer close(p.order)
 	cur := p.getChunk()
 	buf := cur.buf
-	var base int64
+	base := p.startBase
 	var rerr error
 	ended := false
 	// fill reads until buf holds at least n bytes or the input ends.
@@ -249,7 +255,7 @@ func (p *parallel) produce() {
 	}
 	// Lines to skip are discarded here, as a sequential Reader discards
 	// them: up to and including a line feed, a carriage return, or both.
-	line := 1
+	line := p.startLine
 	for skip := p.skip; skip > 0; {
 		fill(1)
 		if len(buf) == 0 {
@@ -475,7 +481,7 @@ func (p *parallel) next() error {
 			p.ahead = append(p.ahead, c)
 			if !p.begun {
 				p.begun = true
-				p.baseLine = c.line
+				p.baseLine, p.baseRecNo = c.line, p.startRecNo
 			}
 		}
 		c := p.ahead[0]

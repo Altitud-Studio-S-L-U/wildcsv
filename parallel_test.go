@@ -51,15 +51,17 @@ func outcomes(r *Reader, slices bool, warns *[]string) []string {
 	return append(log, fmt.Sprintf("stats %+v", r.Stats()))
 }
 
+// readAllWays reads in with workers goroutines; workers 0 is the adaptive
+// mode, handing over to two goroutines after size*3 bytes.
 func readAllWays(t *testing.T, in []byte, opts Options, workers, size int, src func([]byte) io.Reader, slices bool) []string {
 	t.Helper()
 	var warns []string
 	opts.Warn = func(pe *ParseError) { warns = append(warns, fmt.Sprintf("warn %+v", *pe)) }
 	opts.Concurrency = workers
-	saved := chunkBytes
-	chunkBytes = size
+	savedSize, savedWorkers, savedHandOver := chunkBytes, autoWorkers, autoHandOver
+	chunkBytes, autoWorkers, autoHandOver = size, 2, int64(size*3)
 	r, err := NewReader(src(in), &opts)
-	chunkBytes = saved
+	chunkBytes, autoWorkers, autoHandOver = savedSize, savedWorkers, savedHandOver
 	if err != nil {
 		return []string{"NewReader " + err.Error()}
 	}
@@ -96,8 +98,8 @@ func FuzzParallel(f *testing.F) {
 		}
 		for si, src := range srcs {
 			for _, slices := range []bool{false, true} {
-				want := readAllWays(t, in, opts, 0, size, src, slices)
-				for _, workers := range []int{2, 3} {
+				want := readAllWays(t, in, opts, 1, size, src, slices)
+				for _, workers := range []int{0, 2, 3} {
 					got := readAllWays(t, in, opts, workers, size, src, slices)
 					if !reflect.DeepEqual(got, want) {
 						t.Fatalf("source %d, slices %v, %d workers, chunks of %d: got\n%s\nwant\n%s",
@@ -139,15 +141,17 @@ func TestParallelFallback(t *testing.T) {
 			for _, slices := range []bool{false, true} {
 				opts := Options{Dialect: &c.d, Encoding: UTF8, Limits: Limits{SampleBytes: 16}}
 				src := func(b []byte) io.Reader { return bytes.NewReader(b) }
-				want := readAllWays(t, []byte(c.in), opts, 0, size, src, slices)
-				got := readAllWays(t, []byte(c.in), opts, 4, size, src, slices)
-				if !reflect.DeepEqual(got, want) {
-					for i := range min(len(got), len(want)) {
-						if got[i] != want[i] {
-							t.Fatalf("%s, chunks of %d, slices %v: first difference at %d:\ngot  %s\nwant %s", c.name, size, slices, i, got[i], want[i])
+				want := readAllWays(t, []byte(c.in), opts, 1, size, src, slices)
+				for _, workers := range []int{0, 4} {
+					got := readAllWays(t, []byte(c.in), opts, workers, size, src, slices)
+					if !reflect.DeepEqual(got, want) {
+						for i := range min(len(got), len(want)) {
+							if got[i] != want[i] {
+								t.Fatalf("%s, chunks of %d, slices %v: first difference at %d:\ngot  %s\nwant %s", c.name, size, slices, i, got[i], want[i])
+							}
 						}
+						t.Fatalf("%s, chunks of %d: %d results, want %d", c.name, size, len(got), len(want))
 					}
-					t.Fatalf("%s, chunks of %d: %d results, want %d", c.name, size, len(got), len(want))
 				}
 			}
 		}

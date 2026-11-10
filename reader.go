@@ -32,7 +32,19 @@ type Reader struct {
 	late     *lateReader
 	encoding Encoding
 	done     error
+
+	// A sequential Reader whose Options.Concurrency is 0 hands over to a
+	// parallel one once it has read handOver bytes, if the input goes on.
+	handOver int64
+	settings *settings
 }
+
+// autoWorkers is how many goroutines a Reader whose Options.Concurrency is 0
+// uses once the input proves large; autoHandOver is when it decides.
+var (
+	autoWorkers  = min(runtime.GOMAXPROCS(0), 8)
+	autoHandOver = int64(1 << 20)
+)
 
 // NewReader detects the kind, encoding and dialect of r from a sample, then
 // returns a Reader that streams the records of the whole input. The sample is
@@ -81,7 +93,30 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error) {
 	rd.sc = newScanner(body, det.Dialect, s.lim, s.Strict)
 	rd.sc.warn = s.Warn
 	rd.sc.skipLines = s.SkipLines
+	if s.Concurrency == 0 && !complete && autoWorkers > 1 {
+		rd.handOver, rd.settings = autoHandOver, s
+	}
 	return rd, nil
+}
+
+// handToParallel continues reading with goroutines from where the scanner
+// stands, between two records: the parallel reader takes the bytes the
+// scanner has buffered and then the rest of the input, and carries on its
+// offsets, lines, record numbers and counts.
+func (r *Reader) handToParallel() {
+	sc := r.sc
+	r.handOver = 0
+	if sc.eof || sc.rerr != nil {
+		return // what is left is already in the buffer
+	}
+	src := io.MultiReader(&sliceReader{b: sc.buf[sc.pos:sc.end]}, sc.r)
+	p := newParallel(src, r.det.Dialect, r.settings, autoWorkers)
+	p.skip = 0
+	p.startBase, p.startLine, p.startRecNo = sc.abs(), sc.line, sc.recNo
+	p.bare, p.stray, p.invalid = sc.bare, sc.stray, sc.invalid
+	p.ownFields = append(p.ownFields, r.fields...)
+	r.par, r.sc, r.settings = p, nil, nil
+	runtime.AddCleanup(r, func(p *parallel) { p.close() }, p)
 }
 
 // readHead reads up to n+1 bytes, so that the caller knows whether n bytes
@@ -201,6 +236,9 @@ func (r *Reader) ReadSlices() ([][]byte, error) {
 func (r *Reader) advance(strs bool) error {
 	if r.done != nil {
 		return r.done
+	}
+	if r.handOver > 0 && r.sc.abs() >= r.handOver {
+		r.handToParallel()
 	}
 	var err error
 	if p := r.par; p != nil {

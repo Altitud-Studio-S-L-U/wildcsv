@@ -55,7 +55,7 @@ type Options struct {
 	Strict      bool                      // report quoting defects and invalid UTF-8 as errors
 	Warn        func(*ParseError)         // called for each defect that lenient reading accepts
 	ReuseRecord bool                      // Read may return a slice that shares its backing array with the previous one
-	Concurrency int                       // goroutines that read the text; see below
+	Concurrency int                       // goroutines that read the text: 0 adapts, 1 is sequential; see Reader
 	Limits      Limits
 }
 
