@@ -341,10 +341,11 @@ Errors are compared with `errors.Is` and `errors.As`:
 | `ErrInvalidOptions` | A limit is negative, the field limit exceeds the record limit, or the dialect is not valid. The returned error wraps it and says which. |
 
 - A nil `*Options` and a zero `Options` both mean: detect everything, read leniently, default limits.
-- `Detect` reads at most `SampleBytes` + 1 bytes, plus the lines skipped with `SkipLines` when they reach beyond the sample. It returns a report for every kind, and an error only when reading fails, the options are invalid or the encoding is UTF-32.
+- `Detect` reads at most `SampleBytes` + 1 bytes. It returns a report for every kind, and an error only when reading fails, the options are invalid or the encoding is UTF-32.
 - With `Options.Dialect` set, `Detect` still reports the kind, the encoding, the header and the columns; the confidence is 1 and there are no alternatives.
-- `SkipLines` discards lines before the table. Positions still count from the first line of the input.
-- `NewReader` returns a `*KindError`, which wraps `ErrNotDelimited`, for any kind other than `delimited` and `empty`. An empty input gives a reader whose first `Read` returns `io.EOF`.
+- With `Options.Decode` set, the report names the encoding `custom` (`CustomDecoding`) with the basis `custom`.
+- `SkipLines` discards lines before the table. Detection skips them within the sample. Positions still count from the first line of the input.
+- `NewReader` returns a `*KindError`, which wraps `ErrNotDelimited`, for any kind other than `delimited` and `empty`, unless `Options.Dialect` is set: a caller who declares the dialect declares the input to be delimited text, and `Detection().Kind` still says what the sample looked like. An empty input gives a reader whose first `Read` returns `io.EOF`.
 - `Read` returns `io.EOF` at the end of the input and a `*ParseError` for a problem in the data; after a `*ParseError` it can be called again. Errors from the underlying reader are returned as they are.
 - `All` yields each record or error in turn and stops at the end of the input or at an error that is not a `*ParseError`.
 - `FieldPos` gives the position of a field of the record last returned. For a quoted field that is its opening quote.
