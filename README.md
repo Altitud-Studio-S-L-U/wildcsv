@@ -1,145 +1,165 @@
 # wildcsv
 
+**CSV parsing for Go with automatic dialect detection, encoding conversion and bounded memory.**
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/Altitud-Studio-S-L-U/wildcsv.svg)](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv)
 [![CI](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/ci.yml/badge.svg)](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/codeql.yml/badge.svg)](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Read delimited text you did not produce: detect what it is, read it under explicit limits, and say exactly where it is broken.**
+wildcsv is a streaming CSV library for backend services, data imports and ETL pipelines. It reads from any `io.Reader`, detects the input format, and returns UTF-8 records with precise errors and configurable limits. It depends only on the Go standard library.
 
-Go's `encoding/csv` reads RFC 4180 CSV in UTF-8 when you already know the delimiter, and the Go project has decided it will stay that way ([#3150](https://go.dev/issue/3150)). Files that arrive from customers, spreadsheets, banks and other systems rarely fit: they come with semicolons and decimal commas, in Windows-1252 or UTF-16, with a byte order mark ([#9588](https://go.dev/issue/9588)), with single quotes ([#8458](https://go.dev/issue/8458)), or with one unbalanced quote that makes `encoding/csv` hold the rest of the file in memory as a single field ([#20169](https://go.dev/issue/20169)). Sometimes the "CSV" is an Excel workbook or a JSON export.
+- **Automatic detection:** delimiter, quoting, encoding, header and column kinds.
+- **Multiple encodings:** UTF-8, UTF-16 LE/BE and Windows-1252, with custom decoder support.
+- **Controlled resource use:** limits on sample size, field size, record size and field count.
+- **Parallel parsing:** large inputs are processed across goroutines while preserving record order.
+- **Structured errors:** record, line, column and byte offset, with strict and lenient modes.
 
-wildcsv is a Go library and a command for that intake step. It depends only on the standard library.
+[Quick start](#quick-start) · [API](#api) · [Performance](#performance) · [Documentation](#documentation)
 
-- **What is this?** It recognises workbooks, archives, JSON, XML, HTML, PDF and binary data from the first bytes and names them instead of misreading them.
-- **How do I read it?** It detects the encoding and the dialect (delimiter, quote, escape, padding) from a 64 KiB sample, with a confidence margin and the runner-up dialects, and guesses the header and the kind of each column.
-- **Where is it broken?** It streams records holding one at a time, fails a field, a record or a field count as soon as it exceeds its limit, recovers at the next line, and reports every problem with its record, line, column and byte offset.
-- **How fast?** It scans eight bytes at a time, copies each record once, and spreads a large input over goroutines by default, returning the same records in the same order: 3.3 to 5 times as fast as `encoding/csv` on 32 MiB inputs, and up to 5.4 times with `ReadSlices`, which hands out fields without copying them.
+## Installation
 
-## Install
+Requires **Go 1.26 or later**.
 
 ```sh
 go get github.com/Altitud-Studio-S-L-U/wildcsv
-go install github.com/Altitud-Studio-S-L-U/wildcsv/cmd/wildcsv@latest
 ```
 
-The library needs Go 1.26 or later.
+## Quick start
 
-## Read a file in Go
+Use the library directly with a file, an upload, an HTTP body or another `io.Reader`. This example passes each record to your application and stops on the first error:
 
 ```go
-r, err := wildcsv.NewReader(upload, nil) // detect kind, encoding and dialect
-if err != nil {
-	return err // a *wildcsv.KindError for a workbook or JSON, for example
-}
-det := r.Detection()
-log.Printf("%s, %v, confidence %.2f, header %s", det.Encoding, det.Dialect, det.Confidence, det.Header)
+package ingest
 
-for rec, err := range r.All() {
-	if pe, ok := errors.AsType[*wildcsv.ParseError](err); ok {
-		log.Printf("line %d, column %d: %v", pe.Line, pe.Column, pe.Err)
-		continue // the reader goes on with the next line
-	}
+import (
+	"io"
+
+	"github.com/Altitud-Studio-S-L-U/wildcsv"
+)
+
+func ReadCSV(input io.Reader, consume func([]string) error) error {
+	r, err := wildcsv.NewReader(input, nil)
 	if err != nil {
 		return err
 	}
-	process(rec) // every string is valid UTF-8
+	defer r.Close()
+
+	for record, err := range r.All() {
+		if err != nil {
+			return err
+		}
+		if err := consume(record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 ```
 
-Pass `Options.Dialect` and `Options.Encoding` when you know them; nothing is then guessed. `ReadSlices` returns fields that point into the reader's buffers, for code that parses each field at once; `Options.Concurrency` 1 keeps reading in one goroutine. Reading is lenient by default: a quote that does not open, double or close a field is read as data, as in `"He said "hi" to me"`, and `Options.Warn` receives each such defect with its position. `Options.Strict` turns them into errors. See the [package documentation](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv) for runnable examples.
+Passing `nil` selects automatic detection, default limits and lenient parsing. Header detection is descriptive: the header is still returned as the first record. `Close` releases parser resources; the caller owns and closes the underlying input.
 
-## Inspect a file from the command line
+### Explicit configuration
 
-```text
-$ wildcsv inspect orders.csv
-file         orders.csv
-kind         delimited
-encoding     utf-8, from ascii
-delimiter    ; (semicolon)
-quote        " (double quote)
-line ending  crlf
-confidence   0.778
-alternative  , (comma), relative score 0.222
-header       present
-columns      3
+Declare the dialect and encoding when your input contract is known:
 
-#  name     kind
-1  id       integer
-2  fecha    date
-3  importe  number, decimal comma
+```go
+opts := &wildcsv.Options{
+	Dialect:     &wildcsv.Dialect{Delimiter: ';', Quote: '"'},
+	Encoding:    wildcsv.UTF8,
+	Strict:      true,
+	Concurrency: 1,
+	Limits: wildcsv.Limits{
+		MaxFieldBytes:  1 << 20,
+		MaxRecordBytes: 4 << 20,
+		MaxFields:      256,
+	},
+}
 ```
 
-`wildcsv check` reads the whole file and lists every problem with its line and column; `wildcsv convert` rewrites the file as standard UTF-8 CSV, replacing the target only if the whole input reads without error. Each command prints one bounded JSON object with `--json` and documents its exit statuses. See [docs/cli.md](docs/cli.md).
+Pass `opts` as the second argument to `NewReader`. `Strict` reports quoting defects and invalid UTF-8 as errors. In lenient mode, `Options.Warn` receives accepted defects. `Concurrency: 1` keeps parsing sequential; the default `0` enables adaptive parallel parsing after 128 KiB, with up to eight parser goroutines.
 
-### For scripts and coding agents
+## API
 
-An agent that is handed a file can find out what it is before writing a parser for it. The command never prompts or opens a network connection, its JSON is versioned and bounded whatever the size of the file, and problem codes are stable. Paste this into your agent instructions:
-
-```text
-When you are handed a tabular text file you did not create, run `wildcsv inspect --json FILE` first.
-If "kind" is not "delimited", do what "hint" says. Otherwise pass the reported delimiter, quote and
-encoding to your parser, or run `wildcsv convert --output clean.csv FILE` and read clean.csv as
-standard UTF-8 CSV. Before importing, run `wildcsv check --json FILE`: exit status 1 means the file
-has errors, listed under "problems" with line and column.
-```
-
-## What it detects
-
-| | |
+| API | Purpose |
 | --- | --- |
-| Kinds | delimited text, empty, `xlsx`, `ods`, `xls`, `zip`, `gzip`, `bzip2`, `xz`, `zstd`, `pdf`, `parquet`, `json`, `jsonl`, `html`, `xml`, binary |
-| Encodings | UTF-8 (with or without a byte order mark), UTF-16 LE and BE (with a mark or by their zero bytes), Windows-1252; any other through `Options.Decode`, such as a decoder from `golang.org/x/text` |
-| Dialects | comma, semicolon, tab, vertical bar, colon, equals sign, space, number sign and asterisk; double quote, apostrophe or none; backslash escapes; spaces after delimiters |
-| Columns | header present, absent or unknown; per column: integer, number (with decimal comma), percent, currency, date, time, date-time, boolean, URL, e-mail, IPv4, UUID, path, text |
+| `NewReader(input, options)` | Detect the format and create a streaming reader. |
+| `Detect(input, options)` | Inspect a sample without constructing a record reader; consumes bytes from the input. |
+| `Reader.Read()` | Read the next record as `[]string`; returns `io.EOF` at the end. |
+| `Reader.All()` | Iterate over records and errors using a Go range loop. |
+| `Reader.ReadSlices()` | Read fields as `[][]byte` backed by parser buffers; consume or copy them before the next read. |
+| `Reader.Detection()` | Get the detected dialect, encoding, confidence, header and column kinds. |
+| `Reader.FieldPos()` / `Reader.InputOffset()` | Locate fields and track the current position. |
+| `Reader.Stats()` | Inspect record counts, accepted defects and the encoding used. |
+| `Reader.Close()` | Release parser resources when reading ends early. |
 
-When a large file's sample is plain ASCII, the choice between UTF-8 and Windows-1252 waits for the first byte that is not, so an export whose first `é` sits a megabyte in is still read correctly.
+`*wildcsv.ParseError` carries the location and cause of a parsing problem. Applications can stop or continue reading after a parse error; underlying I/O errors end the stream. `*wildcsv.KindError` identifies input that is not delimited text.
 
-## Limits
+A reader must be used by one caller at a time, including when its internal parallel parser is enabled. Separate readers are independent. See the [API reference](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv) and [runnable examples](example_test.go).
 
-| Limit | Default | Meaning |
-| --- | ---: | --- |
-| `SampleBytes` | 65,536 | Bytes examined by detection |
-| `MaxFieldBytes` | 1,048,576 | Bytes of one field |
-| `MaxRecordBytes` | 4,194,304 | Bytes of one record, with its quotes and delimiters |
-| `MaxFields` | 16,384 | Fields in one record |
+## Supported input
 
-A reader holds one record and fixed buffers, so its memory is bounded by `MaxRecordBytes` plus a constant whatever the input; reading in parallel adds a few chunks of up to 160 KiB per goroutine.
+| Capability | Support |
+| --- | --- |
+| Delimiters | Comma, semicolon, tab, pipe, colon, equals, space, `#` and `*` detection. |
+| Quoting | Double quotes, single quotes or no quoting; doubled quotes and backslash escapes. |
+| Encodings | UTF-8 with or without BOM, UTF-16 LE/BE, Windows-1252, and custom conversion through `Options.Decode`. |
+| Metadata | Header detection and column-kind inference, including numbers, dates, booleans, URLs and identifiers. |
+| File identification | Recognises spreadsheets, archives, JSON, XML, HTML, PDF, Parquet and binary data. These formats are identified, not parsed as CSV. |
 
-## How accurate detection is
+Column kinds are metadata; record fields remain strings. Detection is heuristic. Applications with a fixed input contract can provide the dialect and encoding explicitly. The held-out benchmark reports a weighted F1 of **0.948** across POLLOCK, W3C-CSVW and CSV Wrangling; see the [evaluation protocol and results](docs/accuracy.md).
 
-Detection follows the table uniformity method of García (2024), measured on the 816 annotated runs of the POLLOCK, W3C CSV on the Web and CSV Wrangling benchmark sets that other tools publish results for. The method was tuned on half of the files, and every run on the other half is logged:
+## Performance
 
-| | POLLOCK | W3C-CSVW | CSV Wrangling | Weighted F1 |
+Repository benchmarks on generated **32 MiB** inputs, Windows/amd64, Go 1.27.3, Intel Core i9-9900K. Median of three runs, dialect supplied, with `ReuseRecord` enabled for both libraries. The parallel columns use wildcsv's default concurrency.
+
+| Input | `encoding/csv` | wildcsv `Read` | wildcsv `ReadSlices` | wildcsv `Read`, sequential |
 | --- | ---: | ---: | ---: | ---: |
-| Held-out half, accuracy | 98.5% | 97.1% | 87.6% | 0.948 |
-| All files, accuracy | 98.0% | 96.8% | 91.6% | 0.959 |
+| Plain ASCII | 390 MB/s | 1,959 MB/s | 2,119 MB/s | 435 MB/s |
+| Quoted fields and line breaks | 340 MB/s | 1,352 MB/s | 1,493 MB/s | 334 MB/s |
+| Accented and Japanese text | 445 MB/s | 1,479 MB/s | 1,938 MB/s | 357 MB/s |
 
-The best published figure of the Python reference implementation is a weighted F1 of 0.938, on all files. Detection takes a few milliseconds per file. The method, the protocol, the comparison with other tools and the kinds of file that still fail are in [docs/accuracy.md](docs/accuracy.md).
+Parallel `Read` achieves **3.3–5.0×** the throughput of `encoding/csv` on these inputs, using multiple cores. These figures measure parsing with a known dialect; they do not represent automatic detection or end-to-end import throughput. Sequential parsing of the multibyte input is about 20% slower than `encoding/csv`. See [methodology, small-file results and memory measurements](docs/performance.md).
 
-## How fast it reads
+## Resource limits
 
-Throughput on generated 32 MiB inputs, windows/amd64, Intel Core i9-9900K, with the dialect given:
+| Limit | Default |
+| --- | ---: |
+| Detection sample | 64 KiB |
+| Field size | 1 MiB |
+| Record size | 4 MiB |
+| Fields per record | 16,384 |
 
-| Input | `encoding/csv` | wildcsv `Read` | wildcsv `ReadSlices` | wildcsv `Read`, one goroutine |
-| --- | ---: | ---: | ---: | ---: |
-| plain ASCII fields | 390 MB/s | 1,959 MB/s | 2,119 MB/s | 435 MB/s |
-| quoted fields with line breaks | 340 MB/s | 1,352 MB/s | 1,493 MB/s | 334 MB/s |
-| accented and Japanese text | 445 MB/s | 1,479 MB/s | 1,938 MB/s | 357 MB/s |
+Override limits through `Options.Limits`; zero selects the default. The parser streams input without loading the entire file. Memory use depends on the configured limits and concurrency; records retained by the application add to that usage.
 
-Inputs past 128 KiB are read in parallel by default. With one goroutine, wildcsv is about 20% slower than `encoding/csv` on text full of multi-byte characters, because it validates UTF-8 and `encoding/csv` does not; that also holds for such inputs under 128 KiB. If you read trusted RFC 4180 files of a few hundred kilobytes whose dialect you know, `encoding/csv` is as fast and part of the standard library. Method, scaling and memory are in [docs/performance.md](docs/performance.md).
+## Command-line tool
+
+The optional CLI inspects, validates and converts files:
+
+```sh
+go install github.com/Altitud-Studio-S-L-U/wildcsv/cmd/wildcsv@latest
+
+wildcsv inspect --json orders.csv
+wildcsv check orders.csv
+wildcsv convert --output clean.csv orders.csv
+```
+
+See the [CLI reference](docs/cli.md) for options, JSON output and exit codes.
 
 ## Documentation
 
-- [docs/design.md](docs/design.md): the contract: kinds, encodings, dialects, detection, reading rules, errors, API and command
-- [docs/cli.md](docs/cli.md): the command, its JSON and its exit statuses
-- [docs/accuracy.md](docs/accuracy.md): how detection is measured, and the results
-- [docs/performance.md](docs/performance.md): reading and detection costs
+- [API reference](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv)
+- [Design and parsing contract](docs/design.md)
+- [Detection accuracy](docs/accuracy.md)
+- [Performance benchmarks](docs/performance.md)
+- [Changelog](CHANGELOG.md)
 
-## Contributing and security
+## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing. CI runs tests with the race detector on Linux, macOS and Windows, plus static analysis, vulnerability checks and fuzzing.
+
+Report vulnerabilities privately using the [security policy](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE) © Altitud Studio SLU
+[MIT](LICENSE) © Altitud Studio SLU.
