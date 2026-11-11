@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-11
+
 ### Added
 
 - `Detect`: the kind of an input (delimited text, empty, workbooks, archives, compressed files, PDF, Parquet, JSON, JSON Lines, HTML, XML, binary), its encoding and the basis of that decision, its dialect with a confidence margin and up to three runner-up dialects, its line ending, a header guess and the kind of each column, from a sample of at most `Limits.SampleBytes` + 1 bytes.
@@ -15,3 +17,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - The `wildcsv` command with `inspect`, `check` and `convert`, versioned JSON output and documented exit statuses.
 - Detection lets the table of one column compete in samples of fewer than five line feeds, and ignores a delimiter that only ever starts lines.
 - `docs/design.md`, the contract; `docs/accuracy.md`, the measurement of dialect detection on the POLLOCK, W3C CSV on the Web and CSV Wrangling sets with a held-out half; `docs/performance.md`; `docs/cli.md`.
+
+[Unreleased]: https://github.com/Altitud-Studio-S-L-U/wildcsv/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Altitud-Studio-S-L-U/wildcsv/releases/tag/v0.1.0
