@@ -2,9 +2,11 @@
 
 **CSV parsing for Go with automatic dialect detection, encoding conversion and bounded memory.**
 
+[![Release](https://img.shields.io/github/v/release/Altitud-Studio-S-L-U/wildcsv)](https://github.com/Altitud-Studio-S-L-U/wildcsv/releases/latest)
+[![Go version](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go)](go.mod)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Altitud-Studio-S-L-U/wildcsv.svg)](https://pkg.go.dev/github.com/Altitud-Studio-S-L-U/wildcsv)
-[![CI](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/ci.yml/badge.svg)](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/codeql.yml/badge.svg)](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/codeql.yml)
+[![CI](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/Altitud-Studio-S-L-U/wildcsv/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 wildcsv is a streaming CSV library for backend services, data imports and ETL pipelines. It reads from any `io.Reader`, detects the input format, and returns UTF-8 records with precise errors and configurable limits. It depends only on the Go standard library.
@@ -22,7 +24,7 @@ wildcsv is a streaming CSV library for backend services, data imports and ETL pi
 Requires **Go 1.26 or later**.
 
 ```sh
-go get github.com/Altitud-Studio-S-L-U/wildcsv
+go get github.com/Altitud-Studio-S-L-U/wildcsv@v0.1.0
 ```
 
 ## Quick start
@@ -143,6 +145,8 @@ wildcsv inspect --json orders.csv
 wildcsv check orders.csv
 wildcsv convert --output clean.csv orders.csv
 ```
+
+Prebuilt binaries for Linux, macOS and Windows (amd64 and arm64) are available in [GitHub Releases](https://github.com/Altitud-Studio-S-L-U/wildcsv/releases), with SHA-256 checksums and build provenance.
 
 See the [CLI reference](docs/cli.md) for options, JSON output and exit codes.
 
