@@ -159,7 +159,8 @@ func (e *env) checkDoc(fs *flag.FlagSet, c *common, strict bool, maxProblems int
 	columns := len(det.Columns)
 	counts := map[int]int64{}
 	for {
-		rec, err := r.Read()
+		// Only the number of fields matters, so the fields are not copied.
+		rec, err := r.ReadSlices()
 		if err == io.EOF {
 			break
 		}

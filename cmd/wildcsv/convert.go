@@ -68,6 +68,7 @@ func (e *env) convertTo(fs *flag.FlagSet, c *common, output string, crlf bool) (
 	if output == "" {
 		doc.Output = "-"
 	}
+	opts.ReuseRecord = true // each record is written before the next is read
 	r, err := wildcsv.NewReader(in.r, opts)
 	var ke *wildcsv.KindError
 	if errors.As(err, &ke) {

@@ -1,6 +1,7 @@
 package wildcsv
 
 import (
+	"bytes"
 	"io"
 )
 
@@ -42,7 +43,7 @@ func Detect(r io.Reader, opts *Options) (*Detection, error) {
 	if err != nil {
 		return nil, err
 	}
-	det, _, err := detect(head, complete, s)
+	det, _, _, err := detect(head, complete, s, false)
 	return det, err
 }
 
@@ -53,7 +54,11 @@ func defaultDialect(s *settings) Dialect {
 	return Dialect{Delimiter: ',', Quote: '"'}
 }
 
-func detect(head []byte, complete bool, s *settings) (*Detection, encodingDecision, error) {
+// detect builds the report of a sample. With lazy set and the dialect
+// declared, the header and the columns are left to the returned function,
+// which a Reader calls only if its Detection is asked for; otherwise that
+// function is nil.
+func detect(head []byte, complete bool, s *settings, lazy bool) (*Detection, encodingDecision, func(), error) {
 	sample := head
 	if !complete {
 		sample = head[:s.lim.SampleBytes]
@@ -67,38 +72,48 @@ func detect(head []byte, complete bool, s *settings) (*Detection, encodingDecisi
 	}
 	dec, err := decideEncoding(sample, complete, s)
 	if err != nil {
-		return nil, dec, err
+		return nil, dec, nil, err
 	}
 	det.Encoding, det.EncodingBasis, det.BOM = dec.enc, dec.basis, dec.bomLen > 0
 	if k := rawKind(sample); k != "" {
 		det.Kind = k
-		return det, dec, nil
+		return det, dec, nil, nil
 	}
 	text, err := decodeSample(dec, sample, complete, s)
 	if err != nil {
-		return nil, dec, err
+		return nil, dec, nil, err
 	}
 	text = skipLines(text, s.SkipLines)
 	det.Kind = textKind(text, complete)
 	if det.Kind != KindDelimited {
-		return det, dec, nil
+		return det, dec, nil, nil
 	}
 	det.LineEnding = lineEnding(text)
 
-	var table *sampleTable
 	if s.Dialect != nil {
 		det.Confidence = 1
-		table = readTable(text, *s.Dialect, s.lim, complete, maxScoredRecords)
-	} else {
-		det.Dialect, det.Confidence, det.Alternatives, table = detectDialect(text, complete, s)
+		describe := func() { describeTable(det, readTable(text, *s.Dialect, s.lim, complete, maxScoredRecords)) }
+		if lazy {
+			return det, dec, describe, nil
+		}
+		describe()
+		return det, dec, nil, nil
 	}
+	var table *sampleTable
+	det.Dialect, det.Confidence, det.Alternatives, table = detectDialect(text, complete, s)
+	describeTable(det, table)
+	return det, dec, nil, nil
+}
+
+// describeTable fills in the header guess and the columns from the sample
+// read with the dialect.
+func describeTable(det *Detection, table *sampleTable) {
 	det.SampleRecords = len(table.records)
 	if len(table.records) > 0 {
 		ncols := columnCount(table)
 		det.Header = guessHeader(table, ncols)
 		det.Columns = describeColumns(table, ncols, det.Header)
 	}
-	return det, dec, nil
 }
 
 // skipLines drops the first n lines of the sample.
@@ -119,23 +134,16 @@ func skipLines(text []byte, n int) []byte {
 	return text
 }
 
+var crlfBytes, crBytes = []byte("\r\n"), []byte("\r")
+
+// lineEnding names the line breaks of text: a carriage return followed by a
+// line feed is one CRLF, and every other line feed or carriage return counts
+// on its own.
 func lineEnding(text []byte) string {
-	var lf, crlf, cr bool
-	for i := 0; i < len(text); i++ {
-		switch text[i] {
-		case '\n':
-			lf = true
-		case '\r':
-			if i+1 < len(text) && text[i+1] == '\n' {
-				crlf = true
-				i++
-			} else if i+1 < len(text) {
-				cr = true
-			} else {
-				cr = true
-			}
-		}
-	}
+	pairs := bytes.Count(text, crlfBytes)
+	lf := bytes.Count(text, newlineByte) > pairs
+	cr := bytes.Count(text, crBytes) > pairs
+	crlf := pairs > 0
 	n := 0
 	name := "none"
 	for _, e := range []struct {

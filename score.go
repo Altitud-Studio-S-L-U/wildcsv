@@ -10,6 +10,9 @@ import (
 	"unicode/utf8"
 )
 
+// oneColumnLines bounds the samples in which the one-column table competes.
+var oneColumnLines = 5
+
 // maxScoredRecords is the largest number of sample records a candidate is
 // scored on; it is also δ in the score.
 const maxScoredRecords = 50
@@ -44,19 +47,19 @@ func readTable(text []byte, d Dialect, lim Limits, complete bool, max int) *samp
 		}
 		// Comment lines read with any other delimiter look like a column of
 		// text; leaving them out lets the table show its real shape.
-		if d.Delimiter != '#' && !sc.quoted[0] && len(sc.rec) > 0 && sc.rec[0] == '#' {
+		if d.Delimiter != '#' && !sc.fields[0].quoted && sc.fields[0].end > sc.fields[0].start && sc.out[sc.fields[0].start] == '#' {
 			lastWasRecord = false
 			continue
 		}
-		str := string(sc.rec)
-		rec := make([]string, len(sc.ends))
-		prev := 0
-		for i, e := range sc.ends {
-			rec[i] = str[prev:e]
-			prev = e
+		str := sc.recordString()
+		rec := make([]string, len(sc.fields))
+		quoted := make([]bool, len(sc.fields))
+		for i, f := range sc.fields {
+			rec[i] = str[f.start:f.end]
+			quoted[i] = f.quoted
 		}
 		t.records = append(t.records, rec)
-		t.quoted = append(t.quoted, slices.Clone(sc.quoted))
+		t.quoted = append(t.quoted, quoted)
 		lastWasRecord = true
 	}
 	switch {
@@ -237,7 +240,7 @@ func candidates(text []byte, s *settings) []Dialect {
 	}
 	var out []Dialect
 	for _, d := range delims {
-		if !bytes.ContainsRune(text, d) {
+		if !bytes.ContainsRune(text, d) || onlyStartsLines(text, d) {
 			continue
 		}
 		for _, q := range quotes {
@@ -259,7 +262,36 @@ func candidates(text []byte, s *settings) []Dialect {
 			}
 		}
 	}
+	// The table of one column competes too, as the first delimiter, which
+	// does not occur: a character that splits a few lines by chance must
+	// read them more uniformly than leaving them whole does. It comes last,
+	// so it loses ties.
+	if len(out) > 0 && !bytes.ContainsRune(text, delims[0]) && bytes.Count(text, []byte{10}) < oneColumnLines {
+		q := quotes[0]
+		if q == delims[0] {
+			q = 0
+		}
+		out = append(out, Dialect{Delimiter: delims[0], Quote: q})
+	}
 	return out
+}
+
+// onlyStartsLines reports whether every occurrence of d in text begins a
+// line. Such a character separates nothing but an empty first field: it marks
+// lines, as # marks comments, rather than delimiting.
+func onlyStartsLines(text []byte, d rune) bool {
+	ds := utf8.AppendRune(nil, d)
+	for i := 0; ; {
+		j := bytes.Index(text[i:], ds)
+		if j < 0 {
+			return true
+		}
+		at := i + j
+		if at > 0 && text[at-1] != 10 && text[at-1] != 13 {
+			return false
+		}
+		i = at + len(ds)
+	}
 }
 
 // spacesBeforeQuote reports whether a delimiter is followed by spaces and then

@@ -119,8 +119,8 @@ func TestDecoderConsistency(t *testing.T) {
 	// on how the input is split into reads.
 	inputs := []string{"ab\xC3", "ab\xC3\xA9cd\xE9", "ab\xE9\xC3\xA9", "\xE2\x82", "\xE2\x82\xAC\xFF", strings.Repeat("x", 40000) + "\xE9"}
 	for _, in := range inputs {
-		whole, _ := io.ReadAll(newDecoder(strings.NewReader(in), &lateConv{}))
-		one, _ := io.ReadAll(newDecoder(iotest.OneByteReader(strings.NewReader(in)), &lateConv{}))
+		whole, _ := io.ReadAll(&lateReader{src: strings.NewReader(in)})
+		one, _ := io.ReadAll(&lateReader{src: iotest.OneByteReader(strings.NewReader(in))})
 		if string(whole) != string(one) {
 			t.Errorf("%q: whole %q, one byte %q", in, whole, one)
 		}

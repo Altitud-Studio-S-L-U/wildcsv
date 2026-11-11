@@ -25,7 +25,7 @@ go run ./internal/cmd/accuracy run --dir ../csvsniffer --split dev
 
 ## How the method was tuned without tuning on the test
 
-The files are split in two halves by the parity of the first byte of SHA-256 of `<set>/<file name>`, so that a file falls in the same half in the three CSV Wrangling rows. The detection method was adjusted on the **development half** only. The **held-out half** was run once, on commit `9e78c8e`, after the detector was committed; the harness refuses to run it without `--final` and logs every such run. The log is at the end of this page.
+The files are split in two halves by the parity of the first byte of SHA-256 of `<set>/<file name>`, so that a file falls in the same half in the three CSV Wrangling rows. The detection method was adjusted on the **development half** only. The **held-out half** was first run on commit `9e78c8e`, after the detector was committed. A second round of changes, again chosen on the development half alone, was followed by one more held-out run, on commit `670f618`. The harness refuses to run the held-out half without `--final` and logs every such run; the log is at the end of this page. Each run makes the held-out half a little less independent of the method, which is why every one is listed.
 
 | Row | All | Development | Held-out |
 | --- | ---: | ---: | ---: |
@@ -43,41 +43,43 @@ In the MESSY row the reference runs only the 126 messy files but keeps the 142 C
 
 ### Held-out half
 
+Commit `670f618`, the single held-out run of the second round:
+
 | Row | Files | Passes | Failures | Accuracy | Success ratio | F1 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | POLLOCK | 68 | 67 | 0 | 98.53% | 98.53% | 0.9926 |
-| W3C-CSVW | 102 | 94 | 0 | 92.16% | 92.16% | 0.9592 |
-| CSV Wrangling | 89 | 77 | 0 | 86.52% | 86.52% | 0.9277 |
-| CSV Wrangling CODEC | 71 | 60 | 0 | 84.51% | 84.51% | 0.9160 |
-| CSV Wrangling MESSY | 65 | 54 | 0 | 83.08% | 76.06% | 0.8640 |
+| W3C-CSVW | 102 | 99 | 0 | 97.06% | 97.06% | 0.9851 |
+| CSV Wrangling | 89 | 78 | 0 | 87.64% | 87.64% | 0.9341 |
+| CSV Wrangling CODEC | 71 | 61 | 0 | 85.92% | 85.92% | 0.9242 |
+| CSV Wrangling MESSY | 65 | 55 | 0 | 84.62% | 77.46% | 0.8730 |
 
-Weighted F1: **0.9367**.
+Weighted F1: **0.9480**, against 0.9367 at the end of the first round.
 
 ### Development half
 
 | Row | Files | Passes | Failures | Accuracy | Success ratio | F1 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | POLLOCK | 80 | 78 | 0 | 97.50% | 97.50% | 0.9873 |
-| W3C-CSVW | 119 | 111 | 0 | 93.28% | 93.28% | 0.9652 |
-| CSV Wrangling | 90 | 84 | 0 | 93.33% | 93.33% | 0.9655 |
-| CSV Wrangling CODEC | 71 | 66 | 0 | 92.96% | 92.96% | 0.9635 |
-| CSV Wrangling MESSY | 61 | 56 | 0 | 91.80% | 78.87% | 0.8819 |
+| W3C-CSVW | 119 | 115 | 0 | 96.64% | 96.64% | 0.9829 |
+| CSV Wrangling | 90 | 86 | 0 | 95.56% | 95.56% | 0.9773 |
+| CSV Wrangling CODEC | 71 | 68 | 0 | 95.77% | 95.77% | 0.9784 |
+| CSV Wrangling MESSY | 61 | 58 | 0 | 95.08% | 81.69% | 0.8992 |
 
-Weighted F1: 0.9576.
+Weighted F1: 0.9698.
 
 ### All files
 
 | Row | Files | Passes | Failures | Accuracy | Success ratio | F1 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | POLLOCK | 148 | 145 | 0 | 97.97% | 97.97% | 0.9898 |
-| W3C-CSVW | 221 | 205 | 0 | 92.76% | 92.76% | 0.9624 |
-| CSV Wrangling | 179 | 161 | 0 | 89.94% | 89.94% | 0.9471 |
-| CSV Wrangling CODEC | 142 | 126 | 0 | 88.73% | 88.73% | 0.9403 |
-| CSV Wrangling MESSY | 126 | 110 | 0 | 87.30% | 77.46% | 0.8730 |
+| W3C-CSVW | 221 | 214 | 0 | 96.83% | 96.83% | 0.9839 |
+| CSV Wrangling | 179 | 164 | 0 | 91.62% | 91.62% | 0.9563 |
+| CSV Wrangling CODEC | 142 | 129 | 0 | 90.85% | 90.85% | 0.9520 |
+| CSV Wrangling MESSY | 126 | 113 | 0 | 89.68% | 79.58% | 0.8863 |
 
-Weighted F1: 0.9475. Half of these files are the ones the method was tuned on; the held-out figure is the one to rely on.
+Weighted F1: 0.9593. Half of these files are the ones the method was tuned on; the held-out figure is the one to rely on.
 
-### A fix after the held-out run
+### A fix after the first held-out run
 
 The held-out run on `9e78c8e` found one file that came back as `binary`: a semicolon-separated export whose sample holds 26 NUL bytes in 64 KiB, padding left by its exporter. The rule that had made any NUL byte mean binary was replaced by a general one, in which NUL counts toward the 1% of control characters like any other control (commit `e878117`). No constant was tuned. Before and after:
 
@@ -110,7 +112,17 @@ What differs in the conditions:
 - The success ratio leaves failures out of its denominator. The Python tools count a file they cannot decode as a failure; wildcsv decodes those files and counts every miss, so its success ratio and its accuracy are nearly the same.
 - The CSV Wrangling row of the reference has 179 files with failure ratios above 10% for every tool, mostly files in encodings Python could not open with its default codec.
 
-On the reference-compatible weighted F1, wildcsv's held-out half (0.9367) is level with the best published Python figure (0.9378) and its whole-set figure (0.9475) above it. csv-nose publishes higher success rates on every row.
+On the reference-compatible weighted F1, wildcsv's held-out half (0.9480) and its whole set (0.9593) are above the best figure the reference publishes (0.9378). Row by row, on the whole sets, against the best published success ratio of the five tools in the table above:
+
+| Row | wildcsv | Best published | By |
+| --- | ---: | ---: | --- |
+| POLLOCK | 97.97% | 96.55% | CSVsniffer |
+| W3C-CSVW | 96.83% | 99.08% | DuckDB `sniff_csv` |
+| CSV Wrangling | 91.62% | 90.57% | CSVsniffer |
+| CSV Wrangling CODEC | 90.85% | 91.55% | CSVsniffer MADSE |
+| CSV Wrangling MESSY | 79.58% | 80.28% | CSVsniffer MADSE |
+
+csv-nose publishes higher success rates on every row, measured on the whole sets it was developed on; it has not been run here, so no comparison on the held-out half is claimed.
 
 ## Method history on the development half
 
@@ -129,28 +141,44 @@ The starting point was the table uniformity method with the median absolute devi
 
 One more change was tried after the held-out run, prompted by a documentation example rather than by a benchmark file: in the tie rule, count the double quotes that start or end a cell as defects of the reading without quotes. It left the development half unchanged and lost one held-out file (`blocks.csv`, where the apostrophe then won the tie), held-out weighted F1 0.9367 → 0.9328, so it was dropped. Those three runs are in the log below.
 
+### Second round
+
+Two rules, each tried alone against the start of the round and kept only if it raised the weighted F1 and lowered no row:
+
+| Step | Weighted F1 | Passes of 421 runs | Kept |
+| --- | ---: | ---: | --- |
+| Start of the round (commit `c6e3a76`) | 0.9576 | 395 | — |
+| Let the one-column table compete in samples of fewer than 50 line feeds | 0.9614 | 398 | No |
+| The same, fewer than 10 line feeds | 0.9614 | 398 | No |
+| The same, fewer than 5 line feeds | 0.9627 | 399 | **Yes** |
+| Ignore delimiters that occur only at the start of lines | **0.9698** | **405** | **Yes** |
+
+The one-column table won four CSV on the Web unit tests of two lines (`test230`, `test296`, `test300`, `test301`), where a space or a `#` split the lines unevenly. With a bound of 10 or 50 line feeds it also took `methane_molecular_structure_xyz_20140911.csv`, a space-aligned table of seven lines, so the bound was set below that. The second rule took two LimeSurvey dumps, `BIO.csv` and `limesurvey_survey_94328.csv`, whose `#` occurs only at the start of comment lines, in the three CSV Wrangling rows. The held-out half was then run once: weighted F1 0.9367 → 0.9480, with W3C-CSVW 94 → 99 files, CSV Wrangling 77 → 78, POLLOCK unchanged and no row lower.
+
 ## Confidence
 
 Accuracy over all files, each counted once, by the confidence `Detect` reported:
 
 | Confidence | Files | Accuracy |
 | --- | ---: | ---: |
-| below 0.2 | 31 | 80.6% |
-| 0.2 to 0.5 | 36 | 66.7% |
-| 0.5 to 0.8 | 130 | 98.5% |
-| 0.8 and above | 350 | 95.1% |
+| below 0.2 | 32 | 78.1% |
+| 0.2 to 0.5 | 34 | 70.6% |
+| 0.5 to 0.8 | 137 | 99.3% |
+| 0.8 and above | 345 | 98.0% |
 
-Below 0.5 one answer in four is wrong: show the alternatives, or ask. The high band still holds mistakes, mostly the tiny one-column files described below.
+Below 0.5 about one answer in four is wrong: show the alternatives, or ask. The high band still holds mistakes, mostly apostrophes taken for the quote character or the reverse, described below.
 
 ## Known limits
 
-Of the 37 files missed in the POLLOCK, W3C-CSVW and CSV Wrangling rows (the CODEC and MESSY rows reuse CSV Wrangling files):
+Of the 25 files missed in the POLLOCK, W3C-CSVW and CSV Wrangling rows (the CODEC and MESSY rows reuse CSV Wrangling files):
 
-- **One-column files of one to five lines (17: 16 in W3C-CSVW, 1 in CSV Wrangling).** With so little text, a character that happens to occur, such as a space, a colon or a `#`, splits the lines as well as nothing does. These files expect the comma, which never occurs in them. Pass `Options.Dialect` when you know a file has one column.
-- **Apostrophe against double quote (6).** Files where single quotes surround some values and double quotes others.
-- **Comment and preamble lines (4).** Long `#` headers mixed with records that the comment rule does not separate.
+- **Apostrophe against double quote (6).** `baselog.csv`, `Blizak_2010.csv`, `isco.csv`, `JV_newsite_IBC_current_20110517.csv`, `results.csv` and `set001.csv`: single quotes surround some values and double quotes others, or occur as empty `''` cells or escaped as `\'`, and the annotation picks one.
+- **Delimiters inside values (6).** Unit tests of the CSV on the Web specification of two or three lines: in `test245.csv` to `test247.csv` date-time patterns such as `yyyy-MM-ddTHH:mm:ss.S` read as colon-separated numbers, and in `test305.csv` to `test307.csv` cells such as `1;2;3,4;5;6` read as decimal numbers under the semicolon.
+- **Not tables (4).** `bugs.csv` is an HTTP response, `task4_pad.csv` a fixed-width report, `register_data.csv` four lines of which one is data, `replace.csv` fragments without a comma.
 - **Adversarial files (3).** Two POLLOCK files are built so that a pipe occurs more often than the real delimiter, and a third holds geometry text full of commas.
-- **Messy delimiters (7).** Mixed separators, prose with punctuation and very irregular tables, where the annotated delimiter is a judgement.
+- **One column split by chance (2).** `professions.csv` is five lines of one or two words, read with the space; `admins.csv` is the single line `milan#_%pass`.
+- **Comment lines with `#` inside them (1).** `user_design_template.csv`.
+- **Disputed or irregular (3).** `gsi_adresser_og_elevtall_2010.csv` is annotated as comma-separated, but all its 3,573 lines hold 7 fields separated by semicolons and only 99 hold a comma; `ACS_12_5YR_S1903_metadata.csv` has two columns whose second holds lists separated by semicolons; `resources.csv` is four lines of different lengths written to test a parser.
 
 ## Header detection
 
@@ -169,6 +197,8 @@ The benchmark sets carry no ground truth for headers, so the header guess is not
 2026-11-10T16:29:58Z  all      c715f5cb2375231787ee9a010421b40bc8fdcbac  weighted F1 0.9456
 2026-11-10T16:52:10Z  heldout  c6e3a76c5cb63333885f5d7346f58f6771b71a68  weighted F1 0.9367
 2026-11-10T16:52:13Z  all      c6e3a76c5cb63333885f5d7346f58f6771b71a68  weighted F1 0.9475
+2026-11-10T19:39:04Z  heldout  670f618b4258b70c8ac8ba9ec0af978ab5bed5ef  weighted F1 0.9480
+2026-11-10T19:39:06Z  all      670f618b4258b70c8ac8ba9ec0af978ab5bed5ef  weighted F1 0.9593
 ```
 
-The runs at 16:22 measured the NUL fix in the working tree on top of `9e78c8e`, before it was committed as `e878117`; the commit contains that change and nothing else. The runs on `c715f5c` measured the tie-rule change described under the method history, in the working tree; it was dropped and never committed. The last two runs confirmed, on the working tree of the next commit, that fixes to the reader’s limits, positions and UTF-16 handling left every detection unchanged.
+The runs on `670f618` are the second round's single held-out run, and the whole set beside it. The runs at 16:22 measured the NUL fix in the working tree on top of `9e78c8e`, before it was committed as `e878117`; the commit contains that change and nothing else. The runs on `c715f5c` measured the tie-rule change described under the method history, in the working tree; it was dropped and never committed. The last two runs confirmed, on the working tree of the next commit, that fixes to the reader’s limits, positions and UTF-16 handling left every detection unchanged.

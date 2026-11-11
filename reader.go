@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"runtime"
 )
 
 // Stats counts what a [Reader] has read and the defects it accepted.
@@ -17,19 +18,45 @@ type Stats struct {
 
 // Reader streams the records of delimited text.
 //
+// Options.Concurrency sets how many goroutines read it. With 1, the goroutine
+// that calls Read does. With n above 1, a producer goroutine reads the
+// underlying reader and cuts the text into chunks, n goroutines read the
+// chunks, and Read returns their records in order. With 0, the default, the
+// calling goroutine reads the first 128 KiB and, if the input goes on, hands
+// over to min(GOMAXPROCS, 8) goroutines. Whatever the setting, the records,
+// errors, warnings and their order, counts, positions and offsets are the
+// same, and Options.Warn is called from the goroutine that calls Read. A
+// parallel Reader stops its goroutines at the end of the input, on an error
+// that ends it, on Close, or once it is unreachable.
+//
 // A Reader is not safe for concurrent use. Readers do not share state.
 type Reader struct {
-	sc        *scanner
-	det       *Detection
-	reuse     bool
-	record    []string
-	positions []fieldPos
-	records   int64
-	offset    int64
-	late      *lateConv
-	encoding  Encoding
-	done      error
+	sc       *scanner  // reads the text, unless par does
+	par      *parallel // reads the text with Options.Concurrency goroutines
+	det      *Detection
+	describe func() // completes det on the first call to Detection
+	reuse    bool
+	record   []string
+	slices   [][]byte
+	fields   []field // of the record last returned, when sequential
+	records  int64
+	offset   int64
+	late     *lateReader
+	encoding Encoding
+	done     error
+
+	// A sequential Reader whose Options.Concurrency is 0 hands over to a
+	// parallel one once it has read handOver bytes, if the input goes on.
+	handOver int64
+	settings *settings
 }
+
+// autoWorkers is how many goroutines a Reader whose Options.Concurrency is 0
+// uses once the input proves large; autoHandOver is when it decides.
+var (
+	autoWorkers  = min(runtime.GOMAXPROCS(0), 8)
+	autoHandOver = int64(128 << 10)
+)
 
 // NewReader detects the kind, encoding and dialect of r from a sample, then
 // returns a Reader that streams the records of the whole input. The sample is
@@ -47,14 +74,14 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	det, dec, err := detect(head, complete, s)
+	det, dec, describe, err := detect(head, complete, s, true)
 	if err != nil {
 		return nil, err
 	}
 	if s.Dialect == nil && det.Kind != KindDelimited && det.Kind != KindEmpty {
 		return nil, &KindError{Kind: det.Kind}
 	}
-	rd := &Reader{det: det, reuse: s.ReuseRecord, encoding: dec.enc}
+	rd := &Reader{det: det, describe: describe, reuse: s.ReuseRecord, encoding: dec.enc}
 	var body io.Reader
 	if dec.enc == CustomDecoding {
 		body = s.Decode(io.MultiReader(&sliceReader{b: head}, r))
@@ -66,14 +93,42 @@ func NewReader(r io.Reader, opts *Options) (*Reader, error) {
 		case dec.enc == Windows1252:
 			body = newDecoder(body, cp1252Conv{})
 		case dec.basis == BasisASCII:
-			rd.late = &lateConv{}
-			body = newDecoder(body, rd.late)
+			rd.late = &lateReader{src: body}
+			body = rd.late
 		}
+	}
+	if s.Concurrency > 1 && !complete {
+		rd.par = newParallel(body, det.Dialect, s, s.Concurrency)
+		runtime.AddCleanup(rd, func(p *pipeline) { p.close() }, rd.par.pipeline)
+		return rd, nil
 	}
 	rd.sc = newScanner(body, det.Dialect, s.lim, s.Strict)
 	rd.sc.warn = s.Warn
 	rd.sc.skipLines = s.SkipLines
+	if s.Concurrency == 0 && !complete && autoWorkers > 1 {
+		rd.handOver, rd.settings = autoHandOver, s
+	}
 	return rd, nil
+}
+
+// handToParallel continues reading with goroutines from where the scanner
+// stands, between two records: the parallel reader takes the bytes the
+// scanner has buffered and then the rest of the input, and carries on its
+// offsets, lines, record numbers and counts.
+func (r *Reader) handToParallel() {
+	sc := r.sc
+	r.handOver = 0
+	if sc.eof || sc.rerr != nil {
+		return // what is left is already in the buffer
+	}
+	src := io.MultiReader(&sliceReader{b: sc.buf[sc.pos:sc.end]}, sc.r)
+	p := newParallel(src, r.det.Dialect, r.settings, autoWorkers)
+	p.skip = 0
+	p.startBase, p.startLine, p.startRecNo = sc.abs(), sc.line, sc.recNo
+	p.bare, p.stray, p.invalid = sc.bare, sc.stray, sc.invalid
+	p.ownFields = append(p.ownFields, r.fields...)
+	r.par, r.sc, r.settings = p, nil, nil
+	runtime.AddCleanup(r, func(p *pipeline) { p.close() }, p.pipeline)
 }
 
 // readHead reads up to n+1 bytes, so that the caller knows whether n bytes
@@ -91,7 +146,16 @@ func readHead(r io.Reader, n int) ([]byte, bool, error) {
 }
 
 // Detection returns the report of the sample the Reader was built from.
-func (r *Reader) Detection() *Detection { return r.det }
+//
+// With Options.Dialect declared, the header guess and the columns are worked
+// out on the first call, so a Reader that never asks does not pay for them.
+func (r *Reader) Detection() *Detection {
+	if r.describe != nil {
+		r.describe()
+		r.describe = nil
+	}
+	return r.det
+}
 
 // Read returns the next record. It returns io.EOF at the end of the input and
 // a [*ParseError] for a problem in the data, after which it can be called
@@ -99,38 +163,152 @@ func (r *Reader) Detection() *Detection { return r.det }
 //
 // Unless Options.ReuseRecord is set, each call returns a new slice.
 func (r *Reader) Read() ([]string, error) {
-	if r.done != nil {
-		return nil, r.done
-	}
-	err := r.sc.readRecord()
-	if err != nil {
-		var pe *ParseError
-		if !errors.As(err, &pe) {
-			r.done = err
-		}
+	if err := r.advance(true); err != nil {
 		return nil, err
 	}
-	sc := r.sc
-	n := len(sc.ends)
-	var rec []string
-	if r.reuse && cap(r.record) >= n {
-		rec = r.record[:n]
+	var str string
+	var fields []field
+	if p := r.par; p != nil {
+		if rec := p.lastStrings(); rec != nil {
+			r.accept()
+			return rec, nil
+		}
+		if views := p.lastViews(); views != nil {
+			rec := r.recordSlice(len(views))
+			for i, v := range views {
+				rec[i] = string(v)
+			}
+			r.accept()
+			return rec, nil
+		}
+		fields, _ = p.lastFields()
+		if p.fbIsStr {
+			str = p.fbStr
+		} else {
+			str = string(p.fbBytes[:fields[len(fields)-1].end])
+		}
 	} else {
-		rec = make([]string, n)
+		str, fields = r.sc.recordString(), r.sc.fields
 	}
-	str := string(sc.rec)
-	prev := 0
-	for i, e := range sc.ends {
-		rec[i] = str[prev:e]
-		prev = e
+	rec := r.recordSlice(len(fields))
+	for i, f := range fields {
+		rec[i] = str[f.start:f.end]
 	}
+	r.accept()
+	return rec, nil
+}
+
+// recordSlice returns a slice of n strings for Read to fill: the previous one
+// again when records may share it.
+func (r *Reader) recordSlice(n int) []string {
+	if r.reuse && cap(r.record) >= n {
+		r.record = r.record[:n]
+		return r.record
+	}
+	rec := make([]string, n)
 	if r.reuse {
 		r.record = rec
 	}
-	r.positions = append(r.positions[:0], sc.fpos...)
+	return rec
+}
+
+// ReadSlices is Read without copies: like the line bufio.Reader.ReadSlice
+// returns, the fields point into the Reader's buffers and are valid only
+// until the next call to a read method, and the slice holding them is reused.
+// Once the Reader has warmed up it allocates nothing, which makes it the
+// fastest way to read when each field is parsed or copied right away.
+func (r *Reader) ReadSlices() ([][]byte, error) {
+	if err := r.advance(false); err != nil {
+		return nil, err
+	}
+	r.slices = r.slices[:0]
+	if p := r.par; p != nil {
+		if views := p.lastViews(); views != nil {
+			r.accept()
+			return views, nil
+		}
+		if strs := p.lastStrings(); strs != nil {
+			for _, s := range strs {
+				r.slices = append(r.slices, []byte(s))
+			}
+		} else {
+			fields, _ := p.lastFields()
+			for _, f := range fields {
+				if p.fbIsStr {
+					r.slices = append(r.slices, []byte(p.fbStr[f.start:f.end]))
+				} else {
+					r.slices = append(r.slices, p.fbBytes[f.start:f.end:f.end])
+				}
+			}
+		}
+	} else {
+		sc := r.sc
+		sc.collapse()
+		for _, f := range sc.fields {
+			r.slices = append(r.slices, sc.out[f.start:f.end:f.end])
+		}
+	}
+	r.accept()
+	return r.slices, nil
+}
+
+// advance reads the next record. strs says whether the caller wants strings,
+// which a parallel Reader then has its workers make.
+func (r *Reader) advance(strs bool) error {
+	if r.done != nil {
+		return r.done
+	}
+	if r.handOver > 0 && r.sc.abs() >= r.handOver {
+		r.handToParallel()
+	}
+	var err error
+	if p := r.par; p != nil {
+		if !p.started {
+			p.start(strs)
+		}
+		err = p.next()
+	} else {
+		err = r.sc.readRecord()
+	}
+	if err != nil {
+		if _, ok := errors.AsType[*ParseError](err); !ok {
+			r.done = err
+			if r.par != nil {
+				r.par.close()
+			}
+		}
+	}
+	return err
+}
+
+// accept makes the record just read the one last returned.
+func (r *Reader) accept() {
+	if p := r.par; p != nil {
+		r.offset = p.offset
+	} else {
+		sc := r.sc
+		r.fields, sc.fields = sc.fields, r.fields[:0]
+		r.offset = sc.abs()
+	}
 	r.records++
-	r.offset = sc.abs()
-	return rec, nil
+}
+
+// Close stops the goroutines of a Reader whose Options.Concurrency is above
+// one; for other Readers it only marks them closed. Reading to io.EOF, or to
+// an error that is not a [*ParseError], stops the goroutines as well, and so
+// does the garbage collector once the Reader is unreachable. After Close the
+// read methods return [ErrClosed], or the error that ended the input if one
+// had. A producer blocked in a Read of the underlying reader stops when that
+// Read returns. Close does not close the underlying reader, and always
+// returns nil.
+func (r *Reader) Close() error {
+	if r.par != nil {
+		r.par.close()
+	}
+	if r.done == nil {
+		r.done = ErrClosed
+	}
+	return nil
 }
 
 // All yields each record or error in turn. It stops at the end of the input
@@ -159,11 +337,15 @@ func (r *Reader) All() iter.Seq2[[]string, error] {
 // record last returned starts; for a quoted field, its opening quote. It
 // panics if field is out of range.
 func (r *Reader) FieldPos(field int) (line, column int) {
-	if field < 0 || field >= len(r.positions) {
+	fields, lineBase := r.fields, 0
+	if r.par != nil {
+		fields, lineBase = r.par.lastFields()
+	}
+	if field < 0 || field >= len(fields) {
 		panic("wildcsv: FieldPos: field index out of range")
 	}
-	p := r.positions[field]
-	return p.line, p.col
+	f := fields[field]
+	return f.line + lineBase, f.col
 }
 
 // InputOffset returns the byte offset in the text just after the record last
@@ -172,15 +354,18 @@ func (r *Reader) InputOffset() int64 { return r.offset }
 
 // Stats returns the counts so far.
 func (r *Reader) Stats() Stats {
-	st := Stats{
-		Records:     r.records,
-		BareQuotes:  r.sc.bare,
-		StrayQuotes: r.sc.stray,
-		InvalidUTF8: r.sc.invalid,
-		Encoding:    r.encoding,
+	st := Stats{Records: r.records, Encoding: r.encoding}
+	if p := r.par; p != nil {
+		st.BareQuotes, st.StrayQuotes, st.InvalidUTF8 = p.bare, p.stray, p.invalid
+	} else {
+		st.BareQuotes, st.StrayQuotes, st.InvalidUTF8 = r.sc.bare, r.sc.stray, r.sc.invalid
 	}
-	if r.late != nil && r.late.decided != "" {
-		st.Encoding = r.late.decided
+	// The decision counts once reading has reached the byte it was made on,
+	// however far ahead the buffers or the goroutines have read.
+	if r.late != nil {
+		if e, at := r.late.encoding(); e != "" && (r.offset > at || r.done != nil) {
+			st.Encoding = e
+		}
 	}
 	return st
 }

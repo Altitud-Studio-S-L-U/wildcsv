@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/Altitud-Studio-S-L-U/wildcsv"
@@ -125,4 +126,35 @@ func ExampleOptions_decode() {
 	fmt.Println(rec, r.Detection().Encoding)
 	// Output:
 	// [A B] custom
+}
+
+// ReadSlices hands out the fields without copying them, for code that parses
+// or copies each field right away, such as this sum of amounts.
+func ExampleReader_ReadSlices() {
+	data := "sku,amount\nA1,12.50\nB2,7.25\nC3,0.25\n"
+	r, err := wildcsv.NewReader(strings.NewReader(data), nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := r.ReadSlices(); err != nil { // the header
+		log.Fatal(err)
+	}
+	total := 0.0
+	for {
+		fields, err := r.ReadSlices()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		// fields[1] is valid only until the next call, so it is used now.
+		v, err := strconv.ParseFloat(string(fields[1]), 64)
+		if err != nil {
+			log.Fatal(err)
+		}
+		total += v
+	}
+	fmt.Printf("%.2f\n", total)
+	// Output: 20.00
 }
